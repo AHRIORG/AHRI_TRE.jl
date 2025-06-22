@@ -7,6 +7,5 @@
             "database": "${workspaceFolder:RDAIngest.jl}/database/RDA.sqlite",
             "name": "RDA"
         }
-    ],
-    "julia.environmentPath": "/home/kherbst/repos/RDALake.jl"
+    ]
 }
