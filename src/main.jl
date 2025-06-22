@@ -1,9 +1,9 @@
 # Set working directory
-cd("/Users/chu.282/Dropbox/OSU/RDA_private/RDAORG/RDAIngest.jl")
+cd("/Users/chu.282/Dropbox/OSU/RDA_private/RDAORG/RDALake.jl")
 using Pkg
-#Pkg.develop(PackageSpec(path="/Users/chu.282/Dropbox/OSU/RDA_private/RDAORG/RDAIngest.jl"))
+#Pkg.develop(PackageSpec(path="/Users/chu.282/Dropbox/OSU/RDA_private/RDAORG/RDALake.jl"))
 
-using RDAIngest
+using RDALake
 using ConfigEnv
 using Logging
 

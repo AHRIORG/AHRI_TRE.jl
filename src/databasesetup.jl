@@ -1,4 +1,4 @@
-using RDAIngest
+using RDALake
 using ConfigEnv
 
 dotenv()

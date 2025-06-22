@@ -1,5 +1,5 @@
 using ConfigEnv
-using RDAIngest
+using RDALake
 using DBInterface
 using Logging
 #get environment variables

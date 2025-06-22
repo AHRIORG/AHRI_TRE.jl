@@ -1,4 +1,4 @@
-module RDAIngest
+module RDALake
 
 using DataFrames
 using SQLite
@@ -362,7 +362,7 @@ Base.@kwdef mutable struct CHAMPSIngest <: AbstractIngest
     
     # Metadata for transformation
     transform_desc::String = "Ingest of CHAMPS Level-2 Data"
-    code_reference::Vector{UInt8} = b"RDAIngest.ingest_data"
+    code_reference::Vector{UInt8} = b"RDALake.ingest_data"
     author::String = "Yue Chu, Kobus Herbst"
 
     # Default metadata for source ingestion
@@ -413,7 +413,7 @@ Base.@kwdef mutable struct COMSAMZIngest <: AbstractIngest
     
     # Metadata for transformation
     transform_desc::String = "Ingest of COMSA MZ Level-2 Data"
-    code_reference::Vector{UInt8} = b"RDAIngest.ingest_data"
+    code_reference::Vector{UInt8} = b"RDALake.ingest_data"
     author::String = "Yue Chu"
 
     # Default metadata for source ingestion
@@ -461,7 +461,7 @@ Base.@kwdef mutable struct HEALSLIngest <: AbstractIngest
     
     # Metadata for transformation
     transform_desc::String = "Ingest of HEALSL Level-2 Data"
-    code_reference::Vector{UInt8} = b"RDAIngest.ingest_data"
+    code_reference::Vector{UInt8} = b"RDALake.ingest_data"
     author::String = "Yue Chu"
 
     # Default metadata for source ingestion
