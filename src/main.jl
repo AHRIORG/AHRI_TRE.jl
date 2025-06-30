@@ -1,11 +1,6 @@
-# Set working directory
-cd("/Users/chu.282/Dropbox/OSU/RDA_private/RDAORG/RDALake.jl")
-using Pkg
-#Pkg.develop(PackageSpec(path="/Users/chu.282/Dropbox/OSU/RDA_private/RDAORG/RDALake.jl"))
-
 using RDALake
 using ConfigEnv
-using Logging
+using Logging, LoggingExtras
 
 using DBInterface
 using DataFrames
@@ -16,21 +11,32 @@ using SQLite
 
 #get environment variables
 dotenv()
+
 #region Setup Logging
-l = open("log.log", "a+")
-io = IOContext(l, :displaysize => (100, 100))
-logger = SimpleLogger(io)
-old_logger = global_logger(logger)
+logger = FormatLogger(open("logs/log.log", "w")) do io, args
+    # Write the module, level and message only
+    println(io, args._module, " | ", "[", args.level, "] ", args.message)
+end
+minlogger = MinLevelLogger(logger, Logging.Info)
+old_logger = global_logger(minlogger)
+
 @info "Execution started $(Dates.format(now(), "yyyy-mm-dd HH:MM"))"
-flush(io)
+@info "Environmental variables"
+@info "RDA_DATABASE_PATH = $(ENV["RDA_DATABASE_PATH"])"
+@info "RDA_DBNAME = $(ENV["RDA_DBNAME"])"
+@info "DATA_INGEST_PATH = $(ENV["DATA_INGEST_PATH"])"
+@info "DATA_DICTIONARY_PATH = $(ENV["DATA_DICTIONARY_PATH"])"
+@info "ISO3_PATH = $(ENV["ISO3_PATH"])"
+@info "RDA_LAKE_PATH = $(ENV["RDA_LAKE_PATH"])"
+@info "RDA_LAKE_DB = $(ENV["RDA_LAKE_DB"])"
 #endregion
 
 #"""
 #CREATE RDA FROM SCRATCH
 #"""
 
-@time createdatabase(ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], replace=true, sqlite=true)
-db = opendatabase(ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"]; sqlite=true)
+createdatabase(ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], replace=true, sqlite=true)
+@info "===== Creating RDA database completed $(Dates.format(now(), "yyyy-mm-dd HH:MM"))"
 
 t = now()
 
@@ -44,25 +50,19 @@ source = CHAMPSSource()
 ingest = CHAMPSIngest()
 
 @info "Ingesting CHAMPS source"
-flush(io)
-@time ingest_source(source, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"], ENV["ISO3_PATH"], sqlite=true)
+ingest_source(source, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"], ENV["ISO3_PATH"])
 
 @info "Ingesting CHAMPS dictionaries"
-flush(io)
-@time ingest_dictionary(ingest, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_DICTIONARY_PATH"], sqlite=true)
+ingest_dictionary(ingest, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_DICTIONARY_PATH"])
 
 @info "Ingesting CHAMPS deaths"
-flush(io)
-@time ingestion_id = ingest_deaths(ingest, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"]; sqlite=true)
+ingestion_id = ingest_deaths(ingest, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"])
 
 @info "Ingesting CHAMPS datasets"
-flush(io)
-@time ingest_data(ingest, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"]; ingestion_id=ingestion_id, sqlite=true)
+ingest_data(ingest, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"]; ingestion_id=ingestion_id, sqlite=true, lake_data=ENV["RDA_LAKE_PATH"], lake_db=ENV["RDA_LAKE_DB"])
 
-d = now() - t
-@info "===== Ingesting CHAMPS into sqlite completed $(Dates.format(now(), "yyyy-mm-dd HH:MM")) duration $(round(d, Dates.Second))"
-flush(io)
-
+elapsed = now() - t
+@info "===== Ingesting CHAMPS into sqlite completed $(Dates.format(now(), "yyyy-mm-dd HH:MM")) duration $(canonicalize(Dates.CompoundPeriod(elapsed)))"
 
 t = now()
 
@@ -76,22 +76,18 @@ source = COMSAMZSource()
 ingest = COMSAMZIngest()
 
 @info "Ingesting COMSA MZ source"
-flush(io)
-@time ingest_source(source, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"], ENV["ISO3_PATH"], sqlite=true)
+ingest_source(source, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"], ENV["ISO3_PATH"])
 
 @info "Ingesting COMSA MZ dictionaries"
-flush(io)
-@time ingest_dictionary(ingest, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_DICTIONARY_PATH"], sqlite=true)
+ingest_dictionary(ingest, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_DICTIONARY_PATH"])
 
 @info "Ingesting COMSA MZ deaths"
-flush(io)
-@time ingestion_id = ingest_deaths(ingest, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"]; sqlite=true)
+ingestion_id = ingest_deaths(ingest, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"])
 
 @info "Ingesting COMSA MZ datasets"
-flush(io)
-@time ingest_data(ingest, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"]; ingestion_id=ingestion_id, sqlite=true)
+ingest_data(ingest, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"]; ingestion_id=ingestion_id, sqlite=true, lake_data=ENV["RDA_LAKE_PATH"], lake_db=ENV["RDA_LAKE_DB"])
 
-d = now() - t
-@info "===== Ingesting COMSA MZ into sqlite completed $(Dates.format(now(), "yyyy-mm-dd HH:MM")) duration $(round(d, Dates.Second))"
-flush(io)
+elapsed = now() - t
+@info "===== Ingesting COMSA MZ into sqlite completed $(Dates.format(now(), "yyyy-mm-dd HH:MM")) duration $(canonicalize(Dates.CompoundPeriod(elapsed)))"
 
+global_logger(old_logger)

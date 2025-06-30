@@ -8,3 +8,4 @@ test*.jl
 *.log
 .DS_Store
 .vscode/
+/logs

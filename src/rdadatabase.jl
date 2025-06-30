@@ -72,30 +72,53 @@ function createdatabasesqlserver(server, name; replace=replace)::ODBC.Connection
     return ODBC.Connection("Driver=ODBC Driver 17 for SQL Server;Server=$server;Database=$name;Trusted_Connection=yes;")
 end
 """
-    opendatabase(path::String, name::String; sqlite = true)::DBInterface.Connection
+    opendatabase(path::String, name::String; sqlite=true, lake_data::String=nothing, lake_db::String=nothing)
 
 If sqlite = true (default) open file on path as an SQLite database (assume .sqlite extension)
 else open database 'name' on server 'path' (assume SQL Server database)
+    lake_data and lake_db are optional parameters to open a ducklake connection in which to store datasets
+    lake_data is the path to the ducklake data directory, and lake_db is the name of the ducklake metadata database file (without extension)
+Returns a tuple of the SQLite database connection and the DuckDB connection if lake_data and lake_db are provided.
 """
-function opendatabase(path::String, name::String; sqlite=true)::DBInterface.Connection
+function opendatabase(path::String, name::String, sqlite=true, lake_data::Union{String,Nothing}=nothing, lake_db::Union{String,Nothing}=nothing)
     if sqlite
-        return opensqlitedatabase(path, name)
+        return opensqlitedatabase(path, name, lake_data, lake_db)
     else
-        return opensqlserverdatabase(path, name)
+        error("SQL Server database connections are not yet supported in RDALake.")
     end
 end
 """
-    opensqlitedatabase(path::String, name::String)::DBInterface.Connection
+    opensqlitedatabase(path::String, name::String, lake_data, lake_db)
 
 Open file on path as an SQLite database (assume .sqlite extension)
+    lake_data and lake_db are optional parameters to open a ducklake connection in which to store datasets
+    lake_data is the path to the ducklake data directory, and lake_db is the name of the ducklake metadata database file (without extension)
+Returns a tuple of the SQLite database connection and the DuckDB connection if lake_data and lake_db are provided.
 """
-function opensqlitedatabase(path::String, name::String)::DBInterface.Connection
+function opensqlitedatabase(path::String, name::String, lake_data, lake_db)
+    @info "Opening SQLite database at $(joinpath(path, "$name.sqlite"))"
     file = joinpath(path, "$name.sqlite")
     if isfile(file)
-        return SQLite.DB(file)
+        db = SQLite.DB(file)
     else
         error("File '$file' not found.")
     end
+    conn = nothing
+    # Open ducklake database if lake_data and lake_db are provided
+    if !isnothing(lake_data) && !isnothing(lake_db)
+        @info "Opening DuckDB data lake at $(lake_data) with metadata database $(joinpath(path, "$lake_db.sqlite"))"
+        # Ensure the lake_data directory exists
+        if !isdir(lake_data)
+            mkpath(lake_data)
+        end
+        metadb = joinpath(path, "$lake_db.sqlite")
+        ddb = DuckDB.DB()
+        conn = DBInterface.connect(ddb)
+        # Attach the data lake database
+        DBInterface.execute(conn, "ATTACH 'ducklake:sqlite:$metadb' AS rda_lake (DATA_PATH '$lake_data');")
+        DBInterface.execute(conn, "USE rda_lake;")
+    end
+    return db, conn
 end
 """
     opensqlserverdatabase(server::String, name::String)::DBInterface.Connection
@@ -380,7 +403,7 @@ function createsources(db::SQLite.DB)
 
     study_types = initstudytypes()
     savedataframe(db, study_types, "study_types")
-    
+
     return nothing
 end
 
@@ -964,6 +987,7 @@ function createdatasets(db::SQLite.DB)
     "unit_of_analysis_id" INTEGER,
     "repository_id" TEXT,
     "doi" TEXT,
+    "in_lake" TINYINT NOT NULL DEFAULT 0, -- 0 = false, 1 = true if dataset is in the RDA lake
     CONSTRAINT "fk_datasets_unit_of_analysis_id" FOREIGN KEY ("unit_of_analysis_id") REFERENCES "unit_of_analysis_types" ("unit_of_analysis_id") ON DELETE CASCADE ON UPDATE RESTRICT,
     CONSTRAINT "fk_datasets_repository_id" FOREIGN KEY ("repository_id") REFERENCES "repository" ("repository_id") ON DELETE CASCADE ON UPDATE RESTRICT
     );
@@ -990,7 +1014,7 @@ function createdatasets(db::SQLite.DB)
     DBInterface.execute(db, sql)
     units = initunitanalysis()
     savedataframe(db, units, "unit_of_analysis_types")
-    
+
     sql = raw"""
     CREATE TABLE "datarows" (
     "row_id" INTEGER NOT NULL PRIMARY KEY,
@@ -1104,7 +1128,7 @@ function createdatasets(db::ODBC.Connection)
     );
     """
     DBInterface.execute(db, sql)
-    
+
     sql = raw"""
     CREATE TABLE [data] (
         [row_id] INT NOT NULL,
