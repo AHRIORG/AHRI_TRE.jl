@@ -1285,11 +1285,31 @@ function save_dataset(db::DBInterface.Connection, dataset::AbstractDataFrame, na
     @info "Dataset $name ingested."
     return dataset_id
 end
+"""
+    convert_missing_to_string!(df::DataFrame)
+
+If the column type is Missing, convert the column eltype to Union{String, Missing}.
+"""
+function convert_missing_to_string!(df::DataFrame)
+    for name in names(df)
+        if eltype(df[!, name]) == Missing
+            df[!, name] = convert(Vector{Union{String, Missing}}, df[!, name])
+        end
+    end
+    return nothing
+end
+"""
+    savedataframetolake(lake::DBInterface.Connection, df::AbstractDataFrame, name::String, description::String)
+
+Save dataframe to data lake, convert columns of type Missing to Union{String, Missing} for DuckDB compatibility
+NOTE: This function assumes that the ducklake metadatabase is attached as "rda_lake"
+"""
 function savedataframetolake(lake::DBInterface.Connection, df::AbstractDataFrame, name::String, description::String)
     # Save dataframe to data lake
-    @info df
-    @info describe
-    DuckDB.register_data_frame(lake, df, "__DF")
+    # @info df
+    # @info describe
+    convert_missing_to_string!(df) # Convert columns of type Missing to Union{String, Missing} for DuckDB compatibility
+    DuckDB.register_table(lake, df, "__DF")
     sql = "CREATE OR REPLACE TABLE rda_lake.$(name) AS SELECT * FROM __DF"
     DBInterface.execute(db, sql)
     sql = "COMMENT ON TABLE rda_lake.$(name) IS '$(description)'"
