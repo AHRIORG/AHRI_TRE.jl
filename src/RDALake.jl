@@ -170,7 +170,7 @@ Provide COMSA Mozambique specific information
 Base.@kwdef mutable struct COMSAMZSource <: AbstractSource
 
     # Domain info
-    name::String = "COMSAMZ"
+    name::String = "COMSA"
 
     # Study type
     study_type_id::Integer = 1
@@ -1293,7 +1293,7 @@ If the column type is Missing, convert the column eltype to Union{String, Missin
 function convert_missing_to_string!(df::DataFrame)
     for name in names(df)
         if eltype(df[!, name]) == Missing
-            df[!, name] = convert(Vector{Union{String, Missing}}, df[!, name])
+            df[!, name] = convert(Vector{Union{String,Missing}}, df[!, name])
         end
     end
     return nothing
@@ -1311,10 +1311,10 @@ function savedataframetolake(lake::DBInterface.Connection, df::AbstractDataFrame
     convert_missing_to_string!(df) # Convert columns of type Missing to Union{String, Missing} for DuckDB compatibility
     DuckDB.register_table(lake, df, "__DF")
     sql = "CREATE OR REPLACE TABLE rda_lake.$(name) AS SELECT * FROM __DF"
-    DBInterface.execute(db, sql)
+    DBInterface.execute(lake, sql)
     sql = "COMMENT ON TABLE rda_lake.$(name) IS '$(description)'"
-    DBInterface.execute(db, sql)
-    DBInterface.unregister_table(lake, "__DF")
+    DBInterface.execute(lake, sql)
+    DuckDB.unregister_table(lake, "__DF")
     return nothing
 end
 """
@@ -1637,6 +1637,22 @@ Return a dataset with id `dataset` as a DataFrame in the wide format,
 if lake is not specified, the data is read from the `data` table, otherwise from the data lake.
 """
 function dataset_to_dataframe(db::SQLite.DB, dataset::Integer, lake::DBInterface.Connection=nothing)::AbstractDataFrame
+    # Check if dataset is in the data lake
+    inlake = !isnothing(lake)
+    if inlake
+        ds = selectdataframe(db, "datasets", ["dataset_id", "name", "in_lake"], ["dataset_id"], [dataset]) |> DataFrame
+        @info ds
+        if nrow(ds) == 0
+            error("Dataset with id $dataset not found in database.")
+        end
+        inlake = ds[1, :in_lake] == 1
+        if inlake
+            @info "Dataset $dataset is in the data lake."
+            sql = "SELECT * FROM rda_lake.$(datasetlakename(dataset));"
+            df = DBInterface.execute(lake, sql) |> DataFrame
+            return df
+        end
+    end
     sql = """
     SELECT
         d.row_id,
@@ -1716,12 +1732,12 @@ end
 
 Save a dataset in the arrow format
 """
-function dataset_to_arrow(db, dataset, datapath)
+function dataset_to_arrow(db, dataset, datapath, lake::DuckDB.Connection=nothing)
     outputdir = joinpath(datapath, "arrowfiles")
     if !isdir(outputdir)
         mkpath(outputdir)
     end
-    df = dataset_to_dataframe(db, dataset)
+    df = dataset_to_dataframe(db, dataset, lake)
     Arrow.write(joinpath(outputdir, "$(get_datasetname(db,dataset)).arrow"), df, compress=:zstd)
 end
 
@@ -1731,12 +1747,12 @@ end
 
 Save a dataset in compressed csv format
 """
-function dataset_to_csv(db, dataset_id, datapath, compress=false)
+function dataset_to_csv(db, dataset_id, datapath, compress=false, lake::DuckDB.Connection=nothing)
     outputdir = joinpath(datapath, "csvfiles")
     if !isdir(outputdir)
         mkpath(outputdir)
     end
-    df = dataset_to_dataframe(db, dataset_id)
+    df = dataset_to_dataframe(db, dataset_id, lake)
     if (compress)
         CSV.write(joinpath(outputdir, "$(get_datasetname(db,dataset_id)).gz"), df, compress=true) #have trouble opening on MacOS
     else
@@ -1836,7 +1852,8 @@ function get_datasetname(db::SQLite.DB, dataset)
         return missing
     else
         df = DataFrame(result)
-        return df[1, :name]
+        name, ext = splitext(df[1, :name])
+        return name # Return name without extension
     end
 end
 """
