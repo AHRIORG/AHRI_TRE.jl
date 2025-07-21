@@ -1,7 +1,7 @@
 """
     createdatabase(path, name; replace=false, sqlite=true)
 
-Creates a database to store the information contained in the Reference Death Archive (RDA)
+Creates a database to store the information contained in the Trusted Research Environment (TRE)
 By default a sqlite database is created, but this can be changed by setting the sqlite argument to false, 
 in which case a sql server database is created and path is interpreted as the name of the database server.
 """
@@ -360,7 +360,7 @@ end
 """
     createsources(db::SQLite.DB)
 
-Creates tables to record a source and associated site/s for deaths contributed to the RDA
+Creates tables to record a source and associated site/s for deaths contributed to the TRE
 """
 function createsources(db::SQLite.DB)
     sql = raw"""
@@ -412,15 +412,15 @@ end
 
 Default transformation types
 """
-initstudytypes() = DataFrame([(study_type_id=RDA_STUDY_TYPE_DSS, name="Demographic Surveillance"),
-    (study_type_id=RDA_STUDY_TYPE_COHORT, name="Cohort study"),
-    (study_type_id=RDA_STUDY_TYPE_SURVEY, name="Cross-sectional survey"),
-    (study_type_id=RDA_STUDY_TYPE_PANEL, name="Panel data")])
+initstudytypes() = DataFrame([(study_type_id=TRE_STUDY_TYPE_DSS, name="Demographic Surveillance"),
+    (study_type_id=TRE_STUDY_TYPE_COHORT, name="Cohort study"),
+    (study_type_id=TRE_STUDY_TYPE_SURVEY, name="Cross-sectional survey"),
+    (study_type_id=TRE_STUDY_TYPE_PANEL, name="Panel data")])
 
 """
     createsources(db::ODBC.Connection)
 
-Creates tables to record a source and associated site/s for deaths contributed to the RDA
+Creates tables to record a source and associated site/s for deaths contributed to the TRE
 """
 function createsources(db::ODBC.Connection)
     sql = raw"""
@@ -677,15 +677,15 @@ end
 
 Default transformation types
 """
-inittypes() = DataFrame([(transformation_type_id=RDA_TRANSFORMATION_TYPE_INGEST, name="Raw data ingest"),
-    (transformation_type_id=RDA_TRANSFORMATION_TYPE_TRANSFORM, name="Dataset transform")])
+inittypes() = DataFrame([(transformation_type_id=TRE_TRANSFORMATION_TYPE_INGEST, name="Raw data ingest"),
+    (transformation_type_id=TRE_TRANSFORMATION_TYPE_TRANSFORM, name="Dataset transform")])
 """
     initstatuses()
 
 Default transformation statuses
 """
-initstatuses() = DataFrame([(transformation_status_id=RDA_TRANSFORMATION_STATUS_UNVERIFIED, name="Unverified"),
-    (transformation_status_id=RDA_TRANSFORMATION_STATUS_VERIFIED, name="Verified")])
+initstatuses() = DataFrame([(transformation_status_id=TRE_TRANSFORMATION_STATUS_UNVERIFIED, name="Unverified"),
+    (transformation_status_id=TRE_TRANSFORMATION_STATUS_VERIFIED, name="Verified")])
 
 """
     createtransformations(db::ODBC.Connection)
@@ -939,13 +939,13 @@ end
 
 Add default value types
 """
-initvalue_types() = DataFrame([(value_type_id=RDA_TYPE_INTEGER, value_type="Integer", description=""),
-    (value_type_id=RDA_TYPE_FLOAT, value_type="Float", description=""),
-    (value_type_id=RDA_TYPE_STRING, value_type="String", description=""),
-    (value_type_id=RDA_TYPE_DATE, value_type="Date", description="ISO Date yyyy-mm-dd"),
-    (value_type_id=RDA_TYPE_DATETIME, value_type="Datetime", description="ISO Datetime yyyy-mm-ddTHH:mm:ss.sss"),
-    (value_type_id=RDA_TYPE_TIME, value_type="Time", description="ISO Time HH:mm:ss.sss"),
-    (value_type_id=RDA_TYPE_CATEGORY, value_type="Categorical", description="Category represented by a Vocabulary with integer value and string code, stored as Integer")
+initvalue_types() = DataFrame([(value_type_id=TRE_TYPE_INTEGER, value_type="Integer", description=""),
+    (value_type_id=TRE_TYPE_FLOAT, value_type="Float", description=""),
+    (value_type_id=TRE_TYPE_STRING, value_type="String", description=""),
+    (value_type_id=TRE_TYPE_DATE, value_type="Date", description="ISO Date yyyy-mm-dd"),
+    (value_type_id=TRE_TYPE_DATETIME, value_type="Datetime", description="ISO Datetime yyyy-mm-ddTHH:mm:ss.sss"),
+    (value_type_id=TRE_TYPE_TIME, value_type="Time", description="ISO Time HH:mm:ss.sss"),
+    (value_type_id=TRE_TYPE_CATEGORY, value_type="Categorical", description="Category represented by a Vocabulary with integer value and string code, stored as Integer")
 ])
 function identityinserton(db::ODBC.Connection, table::String)
     sql = "SET IDENTITY_INSERT [$table] ON"
@@ -987,7 +987,7 @@ function createdatasets(db::SQLite.DB)
     "unit_of_analysis_id" INTEGER,
     "repository_id" TEXT,
     "doi" TEXT,
-    "in_lake" TINYINT NOT NULL DEFAULT 0, -- 0 = false, 1 = true if dataset is in the RDA lake
+    "in_lake" TINYINT NOT NULL DEFAULT 0, -- 0 = false, 1 = true if dataset is in the TRE lake
     CONSTRAINT "fk_datasets_unit_of_analysis_id" FOREIGN KEY ("unit_of_analysis_id") REFERENCES "unit_of_analysis_types" ("unit_of_analysis_id") ON DELETE CASCADE ON UPDATE RESTRICT,
     CONSTRAINT "fk_datasets_repository_id" FOREIGN KEY ("repository_id") REFERENCES "repository" ("repository_id") ON DELETE CASCADE ON UPDATE RESTRICT
     );
@@ -1085,8 +1085,8 @@ end
 
 Default unit of analysis
 """
-initunitanalysis() = DataFrame([(unit_of_analysis_id=RDA_UNIT_OF_ANALYSIS_INDIVIDUAL, name="Individual"),
-    (unit_of_analysis_id=RDA_UNIT_OF_ANALYSIS_AGGREGATION, name="Aggregation")])
+initunitanalysis() = DataFrame([(unit_of_analysis_id=TRE_UNIT_OF_ANALYSIS_INDIVIDUAL, name="Individual"),
+    (unit_of_analysis_id=TRE_UNIT_OF_ANALYSIS_AGGREGATION, name="Aggregation")])
 
 """
     createdatasets(db::ODBC.Connection)
