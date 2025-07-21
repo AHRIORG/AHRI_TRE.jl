@@ -1,10 +1,10 @@
 using Pkg
-Pkg.develop(PackageSpec(path="/Users/chu.282/Library/CloudStorage/OneDrive-Personal/RDA/RDALake.jl"))
+# Pkg.develop(PackageSpec(path="/Users/chu.282/Library/CloudStorage/OneDrive-Personal/RDA/AHRI_TRE.jl"))
 # Pkg.develop(PackageSpec(path="/Users/chu.282/Library/CloudStorage/OneDrive-Personal/RDA/RDAClean.jl"))
 # Pkg.develop(PackageSpec(path="/Users/chu.282/Library/CloudStorage/OneDrive-Personal/RDA/RDAConvert.jl"))
 # Pkg.develop(PackageSpec(path="/Users/chu.282/Library/CloudStorage/OneDrive-Personal/RDA/RDANada.jl"))
 
-using RDALake
+using AHRI_TRE
 using ConfigEnv
 using Logging
 using DBInterface
@@ -169,7 +169,7 @@ CSV.write(file, dict; delim=';', quotechar='"', decimal='.')
 # CSV.write(file, new_dict; delim=';', quotechar='"', decimal='.')
 # # Needs one last step of manual replacing ; in csv, otherwise CSV.File has trouble recognizing the delim.
 
-# db_path = "/Users/chu.282/Library/CloudStorage/OneDrive-Personal/RDA/RDALake.jl/database/RDA.sqlite"
+# db_path = "/Users/chu.282/Library/CloudStorage/OneDrive-Personal/RDA/AHRI_TRE.jl/database/RDA.sqlite"
 # db = SQLite.DB(db_path)
 
 @info "===== Get variables and descriptions for all variables"

@@ -1,4 +1,4 @@
-using RDALake
+using AHRI_TRE
 using ConfigEnv
 using Logging
 using DBInterface
@@ -26,7 +26,7 @@ function ingest_all()
         datainstruments=Dict("cdc_93759_DS9.pdf" => "CHAMPS_deid_verbal_autopsy"),
         ingest_desc="Raw CHAMPS Level-2 Data accessed 20230518",
         transform_desc="Ingest of CHAMPS Level-2 Data",
-        code_reference="RDALake.ingest_data",
+        code_reference="AHRI_TRE.ingest_data",
         author="Kobus Herbst; YUE CHU")
     ingestion_id_sqlite = ingest_deaths(CHAMPSIngest, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"]; sqlite=true)
     ingest_data(CHAMPSIngest, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"]; ingestion_id=ingestion_id_sqlite, sqlite=true)
@@ -44,7 +44,7 @@ function ingest_all()
             "5a_2018_COMSA_VASA-GenInfo_English_06272018_clean.pdf" => "Comsa_WHO_VA_20230308"),
         ingest_desc="Ingest raw COMSA Level-2 Data accessed 20230518",
         transform_desc="Ingest of COMSA Level-2 Data",
-        code_reference="RDALake.ingest_data",
+        code_reference="AHRI_TRE.ingest_data",
         author="Kobus Herbst; YUE CHU"
     )
     ingestion_id_sqlite = ingest_deaths(COMSAIngest, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"]; sqlite=true)

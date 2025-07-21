@@ -84,7 +84,7 @@ function opendatabase(path::String, name::String, sqlite=true, lake_data::Union{
     if sqlite
         return opensqlitedatabase(path, name, lake_data, lake_db)
     else
-        error("SQL Server database connections are not yet supported in RDALake.")
+        error("SQL Server database connections are not yet supported in AHRI_TRE.")
     end
 end
 """
