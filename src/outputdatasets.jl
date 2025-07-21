@@ -16,9 +16,9 @@ old_logger = global_logger(minlogger)
 #endregion
 
 t = now()
-@info "============================== Using sqlite database: $(ENV["RDA_DATABASE_PATH"])"
+@info "============================== Using sqlite database: $(ENV["TRE_DATABASE_PATH"])"
 
-db, lake = opendatabase(ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], true, ENV["RDA_LAKE_PATH"], ENV["RDA_LAKE_DB"])
+db, lake = opendatabase(ENV["TRE_DATABASE_PATH"], ENV["TRE_DBNAME"], true, ENV["TRE_LAKE_PATH"], ENV["TRE_LAKE_DB"])
 try
     @time dataset_to_csv(db, 1, ENV["DATA_INGEST_PATH"], false, lake)
     @time dataset_to_csv(db, 2, ENV["DATA_INGEST_PATH"], false, lake)

@@ -3,6 +3,6 @@ using ConfigEnv
 
 dotenv()
 
-@time createdatabase(ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], replace=true)
+@time createdatabase(ENV["TRE_DATABASE_PATH"], ENV["TRE_DBNAME"], replace=true)
 
-@time createdatabase(ENV["RDA_SERVER"], ENV["RDA_DBNAME"], replace=true, sqlite = false)
+@time createdatabase(ENV["TRE_SERVER"], ENV["TRE_DBNAME"], replace=true, sqlite = false)

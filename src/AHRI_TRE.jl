@@ -1302,7 +1302,7 @@ end
     savedataframetolake(lake::DBInterface.Connection, df::AbstractDataFrame, name::String, description::String)
 
 Save dataframe to data lake, convert columns of type Missing to Union{String, Missing} for DuckDB compatibility
-NOTE: This function assumes that the ducklake metadatabase is attached as "rda_lake"
+NOTE: This function assumes that the ducklake metadatabase is attached as "tre_lake"
 """
 function savedataframetolake(lake::DBInterface.Connection, df::AbstractDataFrame, name::String, description::String)
     # Save dataframe to data lake
@@ -1310,9 +1310,9 @@ function savedataframetolake(lake::DBInterface.Connection, df::AbstractDataFrame
     # @info describe
     convert_missing_to_string!(df) # Convert columns of type Missing to Union{String, Missing} for DuckDB compatibility
     DuckDB.register_table(lake, df, "__DF")
-    sql = "CREATE OR REPLACE TABLE rda_lake.$(name) AS SELECT * FROM __DF"
+    sql = "CREATE OR REPLACE TABLE tre_lake.$(name) AS SELECT * FROM __DF"
     DBInterface.execute(lake, sql)
-    sql = "COMMENT ON TABLE rda_lake.$(name) IS '$(description)'"
+    sql = "COMMENT ON TABLE tre_lake.$(name) IS '$(description)'"
     DBInterface.execute(lake, sql)
     DuckDB.unregister_table(lake, "__DF")
     return nothing
@@ -1340,11 +1340,11 @@ Insert data for a column of the source dataset
 function add_data_column(db::SQLite.DB, variable_id, value_type, coldata)
     stmt = prepareinsertstatement(db, "data", ["row_id", "variable_id", "value"])
     if eltype(coldata.value) <: TimeType
-        if value_type == RDA_TYPE_DATE
+        if value_type == TRE_TYPE_DATE
             transform!(coldata, :value => ByRow(x -> !ismissing(x) ? Dates.format(x, "yyyy-mm-dd") : x) => :value)
-        elseif value_type == RDA_TYPE_TIME
+        elseif value_type == TRE_TYPE_TIME
             transform!(coldata, :value => ByRow(x -> !ismissing(x) ? Dates.format(x, "HH:MM:SS.sss") : x) => :value)
-        elseif value_type == RDA_TYPE_DATETIME
+        elseif value_type == TRE_TYPE_DATETIME
             transform!(coldata, :value => ByRow(x -> !ismissing(x) ? Dates.format(x, "yyyy-mm-ddTHH:MM:SS.sss") : x) => :value)
         else
             error("Variable $variable_id is not a date/time type. value_type = $value_type, eltype = $(eltype(coldata.value))")
@@ -1362,11 +1362,11 @@ Insert data for a column of the source dataset
 """
 function add_data_column(db::ODBC.Connection, variable_id, value_type, coldata)
     #println("Add data column variable_id = $variable_id, value_type = $value_type, eltype = $(eltype(coldata.value))")
-    if value_type == RDA_TYPE_INTEGER
+    if value_type == TRE_TYPE_INTEGER
         stmt = prepareinsertstatement(db, "data", ["row_id", "variable_id", "value_integer"])
-    elseif value_type == RDA_TYPE_FLOAT
+    elseif value_type == TRE_TYPE_FLOAT
         stmt = prepareinsertstatement(db, "data", ["row_id", "variable_id", "value_float"])
-    elseif value_type == RDA_TYPE_STRING
+    elseif value_type == TRE_TYPE_STRING
         stmt = prepareinsertstatement(db, "data", ["row_id", "variable_id", "value_string"])
         if eltype(coldata.value) <: Union{Missing,Number}
             transform!(coldata, :value => ByRow(x -> !ismissing(x) ? string(x) : x) => :value)
@@ -1375,11 +1375,11 @@ function add_data_column(db::ODBC.Connection, variable_id, value_type, coldata)
         else
             transform!(coldata, :value => ByRow(x -> !ismissing(x) ? String(x) : x) => :value)
         end
-    elseif value_type == RDA_TYPE_DATE || value_type == RDA_TYPE_TIME || value_type == RDA_TYPE_DATETIME
+    elseif value_type == TRE_TYPE_DATE || value_type == TRE_TYPE_TIME || value_type == TRE_TYPE_DATETIME
         stmt = prepareinsertstatement(db, "data", ["row_id", "variable_id", "value_datetime"])
-    elseif value_type == RDA_TYPE_CATEGORY && eltype(coldata.value) <: Union{Missing,Integer}
+    elseif value_type == TRE_TYPE_CATEGORY && eltype(coldata.value) <: Union{Missing,Integer}
         stmt = prepareinsertstatement(db, "data", ["row_id", "variable_id", "value_integer"])
-    elseif value_type == RDA_TYPE_CATEGORY && eltype(coldata.value) <: Union{Missing,AbstractString}
+    elseif value_type == TRE_TYPE_CATEGORY && eltype(coldata.value) <: Union{Missing,AbstractString}
         stmt = prepareinsertstatement(db, "data", ["row_id", "variable_id", "value_string"])
         transform!(coldata, :value => ByRow(x -> !ismissing(x) ? String(x) : x) => :value)
     else
@@ -1648,7 +1648,7 @@ function dataset_to_dataframe(db::SQLite.DB, dataset::Integer, lake::DBInterface
         inlake = ds[1, :in_lake] == 1
         if inlake
             @info "Dataset $dataset is in the data lake."
-            sql = "SELECT * FROM rda_lake.$(datasetlakename(dataset));"
+            sql = "SELECT * FROM tre_lake.$(datasetlakename(dataset));"
             df = DBInterface.execute(lake, sql) |> DataFrame
             return df
         end
@@ -1816,15 +1816,15 @@ function get_valuetype(db::ODBC.Connection, variable_id::Integer)
     stmt = DBInterface.prepare(db, sql)
     df = DBInterface.execute(stmt, [variable_id]; iterate_rows=true) |> DataFrame
     if nrow(df) > 0
-        if df[1, :value_type_id] == RDA_TYPE_INTEGER
+        if df[1, :value_type_id] == TRE_TYPE_INTEGER
             return "value_integer"
-        elseif df[1, :value_type_id] == RDA_TYPE_FLOAT
+        elseif df[1, :value_type_id] == TRE_TYPE_FLOAT
             return "value_float"
-        elseif df[1, :value_type_id] == RDA_TYPE_STRING
+        elseif df[1, :value_type_id] == TRE_TYPE_STRING
             return "value_string"
-        elseif df[1, :value_type_id] == RDA_TYPE_DATE || df[1, :value_type_id] == RDA_TYPE_TIME || df[1, :value_type_id] == RDA_TYPE_DATETIME
+        elseif df[1, :value_type_id] == TRE_TYPE_DATE || df[1, :value_type_id] == TRE_TYPE_TIME || df[1, :value_type_id] == TRE_TYPE_DATETIME
             return "value_datetime"
-        elseif df[1, :value_type_id] == RDA_TYPE_CATEGORY
+        elseif df[1, :value_type_id] == TRE_TYPE_CATEGORY
             return "COALESCE(CAST(d.value_integer AS varchar), d.value_string)"
         else
             error("Variable $variable_id has an invalid value type $(df[1, :value_type_id]).")

@@ -1,0 +1,205 @@
+@prefix saprin: <http://example.org/saprin#> .
+@prefix owl:    <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:    <http://www.w3.org/2001/XMLSchema#> .
+@prefix foaf:   <http://xmlns.com/foaf/0.1/> .
+@prefix schema: <http://schema.org/> .
+@prefix sio:    <http://semanticscience.org/resource/> .
+@prefix prov:   <http://www.w3.org/ns/prov#> .
+@prefix obi:    <http://purl.obolibrary.org/obo/OBI_> .
+
+saprin:Individual a owl:Class ;
+    rdfs:subClassOf foaf:Person ;
+    rdfs:label "Individual" ;
+    rdfs:comment "A person under surveillance." .
+
+saprin:Household a owl:Class ;
+    rdfs:subClassOf foaf:Group ;
+    rdfs:label "Household" ;
+    rdfs:comment "A social unit of individuals with close social ties, not defined strictly by shared residence." .
+
+saprin:ResidenceEpisode a owl:Class ;
+    rdfs:label "Residence Episode" ;
+    rdfs:comment "A period linking an individual or household to a location, capturing internal/external or migration status." ;
+    owl:equivalentClass sio:SIO_001096 .
+
+saprin:SurveillanceEpisode a owl:Class ;
+    rdfs:label "Surveillance Episode" ;
+    rdfs:comment "A period during which an individual is under surveillance." ;
+    rdfs:subClassOf sio:SIO_000006 .
+
+saprin:HouseholdMembershipEpisode a owl:Class ;
+    rdfs:label "Household Membership Episode" ;
+    rdfs:comment "A period when an individual is a member of a household." ;
+    rdfs:subClassOf sio:SIO_000668 .
+
+saprin:Location a owl:Class ;
+    rdfs:label "Location" ;
+    rdfs:comment "A physical or administrative place." ;
+    owl:equivalentClass schema:Place .
+
+saprin:ConsentRecord a owl:Class ;
+    rdfs:label "Consent Record" ;
+    rdfs:comment "A record of consent or refusal for surveillance participation." ;
+    owl:equivalentClass obi:0000810 .
+
+saprin:SurveillanceArea a owl:Class ;
+    rdfs:label "Surveillance Area" ;
+    rdfs:comment "A defined geographic area under surveillance." ;
+    rdfs:subClassOf schema:Place .
+
+saprin:Event a owl:Class ;
+    rdfs:label "Event" ;
+    rdfs:comment "An occurrence affecting surveillance or residence episodes (e.g., migration, birth, death, consent)." ;
+    owl:equivalentClass schema:Event .
+
+saprin:BirthEvent a owl:Class ;
+    rdfs:subClassOf saprin:Event, schema:BirthEvent ;
+    rdfs:label "Birth Event" ;
+    rdfs:comment "Event indicating the birth of an individual." .
+
+saprin:DeathEvent a owl:Class ;
+    rdfs:subClassOf saprin:Event, schema:DeathEvent ;
+    rdfs:label "Death Event" ;
+    rdfs:comment "Event indicating the death of an individual." .
+
+saprin:InMigrationEvent a owl:Class ;
+    rdfs:subClassOf saprin:Event ;
+    rdfs:label "In-Migration Event" ;
+    rdfs:comment "Event indicating an individual or household moving into the surveillance area." .
+
+saprin:OutMigrationEvent a owl:Class ;
+    rdfs:subClassOf saprin:Event ;
+    rdfs:label "Out-Migration Event" ;
+    rdfs:comment "Event indicating an individual or household moving out of the surveillance area." .
+
+saprin:LocationChangeEvent a owl:Class ;
+    rdfs:subClassOf saprin:Event, schema:MoveAction ;
+    rdfs:label "Location Change Event" ;
+    rdfs:comment "Event indicating change of location within the surveillance area." .
+
+saprin:ConsentEvent a owl:Class ;
+    rdfs:subClassOf saprin:Event ;
+    rdfs:label "Consent Event" ;
+    rdfs:comment "Event indicating provision of consent for surveillance." ;
+    owl:equivalentClass obi:0000810 .
+
+saprin:RefusalEvent a owl:Class ;
+    rdfs:subClassOf saprin:Event ;
+    rdfs:label "Refusal Event" ;
+    rdfs:comment "Event indicating withdrawal of consent for surveillance." .
+
+saprin:EnumerationEvent a owl:Class ;
+    rdfs:subClassOf saprin:Event ;
+    rdfs:label "Enumeration Event" ;
+    rdfs:comment "Event indicating enumeration during baseline census." .
+
+saprin:LostToFollowUpEvent a owl:Class ;
+    rdfs:subClassOf saprin:Event ;
+    rdfs:label "Lost To Follow-Up Event" ;
+    rdfs:comment "Event indicating termination of surveillance due to loss to follow-up." .
+
+saprin:MembershipChangeEvent a owl:Class ;
+    rdfs:subClassOf saprin:Event ;
+    rdfs:label "Membership Change Event" ;
+    rdfs:comment "Event indicating a change in household membership (start or end)." .
+
+saprin:memberOfHousehold a owl:ObjectProperty ;
+    rdfs:domain saprin:Individual ;
+    rdfs:range saprin:Household ;
+    rdfs:label "memberOfHousehold" ;
+    rdfs:comment "Links an individual to their social household." ;
+    owl:equivalentProperty foaf:member .
+
+saprin:hasHouseholdMember a owl:ObjectProperty ;
+    rdfs:domain saprin:Household ;
+    rdfs:range saprin:Individual ;
+    rdfs:label "hasHouseholdMember" ;
+    rdfs:comment "Inverse of memberOfHousehold." .
+
+saprin:hasSurveillanceEpisode a owl:ObjectProperty ;
+    rdfs:domain saprin:Individual ;
+    rdfs:range saprin:SurveillanceEpisode ;
+    rdfs:label "hasSurveillanceEpisode" ;
+    rdfs:comment "An individual is associated with one or more surveillance episodes." ;
+    rdfs:subPropertyOf sio:SIO_000132 .
+
+saprin:hasMembershipEpisode a owl:ObjectProperty ;
+    rdfs:domain saprin:Individual ;
+    rdfs:range saprin:HouseholdMembershipEpisode ;
+    rdfs:label "hasMembershipEpisode" ;
+    rdfs:comment "An individual is associated with periods of membership in a household." ;
+    rdfs:subPropertyOf sio:SIO_000668 .
+
+saprin:hasResidenceEpisode a owl:ObjectProperty ;
+    rdfs:domain [ owl:unionOf (saprin:Individual saprin:Household) ] ;
+    rdfs:range saprin:ResidenceEpisode ;
+    rdfs:label "hasResidenceEpisode" ;
+    rdfs:comment "Links an individual or household to a ResidenceEpisode." ;
+    rdfs:subPropertyOf sio:SIO_000132 .
+
+saprin:residesAtLocation a owl:ObjectProperty ;
+    rdfs:domain saprin:ResidenceEpisode ;
+    rdfs:range saprin:Location ;
+    rdfs:label "residesAtLocation" ;
+    rdfs:comment "Links a ResidenceEpisode to a Location." ;
+    owl:equivalentProperty sio:SIO_000061 .
+
+saprin:householdInArea a owl:ObjectProperty ;
+    rdfs:domain saprin:Household ;
+    rdfs:range saprin:SurveillanceArea ;
+    rdfs:label "householdInArea" ;
+    rdfs:comment "Links a household to a surveillance area." .
+
+saprin:episodeStartEvent a owl:ObjectProperty ;
+    rdfs:domain [ owl:unionOf (saprin:SurveillanceEpisode saprin:ResidenceEpisode saprin:HouseholdMembershipEpisode) ] ;
+    rdfs:range saprin:Event ;
+    rdfs:label "episodeStartEvent" ;
+    rdfs:comment "The event that started an episode." .
+
+saprin:episodeEndEvent a owl:ObjectProperty ;
+    rdfs:domain [ owl:unionOf (saprin:SurveillanceEpisode saprin:ResidenceEpisode saprin:HouseholdMembershipEpisode) ] ;
+    rdfs:range saprin:Event ;
+    rdfs:label "episodeEndEvent" ;
+    rdfs:comment "The event that ended an episode." .
+
+saprin:eventLocation a owl:ObjectProperty ;
+    rdfs:domain saprin:Event ;
+    rdfs:range saprin:Location ;
+    rdfs:label "eventLocation" ;
+    rdfs:comment "The location where the event occurred." ;
+    owl:equivalentProperty schema:location .
+
+saprin:hasConsentRecord a owl:ObjectProperty ;
+    rdfs:domain saprin:Household ;
+    rdfs:range saprin:ConsentRecord ;
+    rdfs:label "hasConsentRecord" ;
+    rdfs:comment "Associates a household with its consent records." ;
+    owl:equivalentProperty obi:0000810 .
+
+saprin:episodeStartDate a owl:DatatypeProperty ;
+    rdfs:domain [ owl:unionOf (saprin:SurveillanceEpisode saprin:ResidenceEpisode saprin:HouseholdMembershipEpisode) ] ;
+    rdfs:range xsd:dateTime ;
+    rdfs:label "episodeStartDate" ;
+    rdfs:comment "Start date of the episode." ;
+    owl:equivalentProperty prov:startedAtTime .
+
+saprin:episodeEndDate a owl:DatatypeProperty ;
+    rdfs:domain [ owl:unionOf (saprin:SurveillanceEpisode saprin:ResidenceEpisode saprin:HouseholdMembershipEpisode) ] ;
+    rdfs:range xsd:dateTime ;
+    rdfs:label "episodeEndDate" ;
+    rdfs:comment "End date of the episode." ;
+    owl:equivalentProperty prov:endedAtTime .
+
+saprin:eventDate a owl:DatatypeProperty ;
+    rdfs:domain saprin:Event ;
+    rdfs:range xsd:dateTime ;
+    rdfs:label "eventDate" ;
+    rdfs:comment "Date on which the event occurred." ;
+    owl:equivalentProperty schema:startDate .
+
+saprin:consentGiven a owl:DatatypeProperty ;
+    rdfs:domain saprin:ConsentRecord ;
+    rdfs:range xsd:boolean ;
+    rdfs:label "consentGiven" ;
+    rdfs:comment "True if consent was given for surveillance participation." .

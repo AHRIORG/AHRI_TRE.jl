@@ -1,8 +1,8 @@
 using Pkg
-# Pkg.develop(PackageSpec(path="/Users/chu.282/Library/CloudStorage/OneDrive-Personal/RDA/AHRI_TRE.jl"))
-# Pkg.develop(PackageSpec(path="/Users/chu.282/Library/CloudStorage/OneDrive-Personal/RDA/RDAClean.jl"))
-# Pkg.develop(PackageSpec(path="/Users/chu.282/Library/CloudStorage/OneDrive-Personal/RDA/RDAConvert.jl"))
-# Pkg.develop(PackageSpec(path="/Users/chu.282/Library/CloudStorage/OneDrive-Personal/RDA/RDANada.jl"))
+# Pkg.develop(PackageSpec(path="/Users/chu.282/Library/CloudStorage/OneDrive-Personal/TRE/AHRI_TRE.jl"))
+# Pkg.develop(PackageSpec(path="/Users/chu.282/Library/CloudStorage/OneDrive-Personal/TRE/TREClean.jl"))
+# Pkg.develop(PackageSpec(path="/Users/chu.282/Library/CloudStorage/OneDrive-Personal/TRE/TREConvert.jl"))
+# Pkg.develop(PackageSpec(path="/Users/chu.282/Library/CloudStorage/OneDrive-Personal/TRE/TRENada.jl"))
 
 using AHRI_TRE
 using ConfigEnv
@@ -95,7 +95,7 @@ CSV.write(file, dict; delim=';', quotechar='"', decimal='.')
 
 @info "===== Update HEALSL variable table"
 
-# raw_dict = CSV.read("/Users/chu.282/Library/CloudStorage/OneDrive-Personal/RDA/Data/HEALSL/De_identified_data/ddict_healsl.csv", DataFrame)
+# raw_dict = CSV.read("/Users/chu.282/Library/CloudStorage/OneDrive-Personal/TRE/Data/HEALSL/De_identified_data/ddict_healsl.csv", DataFrame)
 
 # # raw_dict = combine(groupby(raw_dict, [:column_name, :description, :type]), 
 # #                    :data_name => (x -> join(x, " & ")) => :Note)
@@ -146,7 +146,7 @@ CSV.write(file, dict; delim=';', quotechar='"', decimal='.')
 # # Remove duplicates
 # raw_dict = unique(raw_dict,[:column_name, :description, :type])
 
-# # Map datatype to RDA datatypes 
+# # Map datatype to TRE datatypes 
 # unique(raw_dict.type)
 # value_type_mapping = Dict("integer" => 1, "double precision" => 2, "text" => 3,"date"=>4,
 #                           "timestamp with time zone"=>5, "time"=>6, "category"=>7) 
@@ -165,18 +165,18 @@ CSV.write(file, dict; delim=';', quotechar='"', decimal='.')
 # new_dict = select(raw_dict, :Column_Name, :Key, :Description, :Note, :DataType)
 # new_dict = DataFrame("Column_Name;Key;Description;Note;DataType" => [join(map(x -> string(x), row), ";") for row in eachrow(new_dict)])
 
-# file = "/Users/chu.282/Library/CloudStorage/OneDrive-Personal/RDA/RDA/Data Dictionaries/HEALSL/Format_ddict_healsl.csv"
+# file = "/Users/chu.282/Library/CloudStorage/OneDrive-Personal/TRE/TRE/Data Dictionaries/HEALSL/Format_ddict_healsl.csv"
 # CSV.write(file, new_dict; delim=';', quotechar='"', decimal='.')
 # # Needs one last step of manual replacing ; in csv, otherwise CSV.File has trouble recognizing the delim.
 
-# db_path = "/Users/chu.282/Library/CloudStorage/OneDrive-Personal/RDA/AHRI_TRE.jl/database/RDA.sqlite"
+# db_path = "/Users/chu.282/Library/CloudStorage/OneDrive-Personal/TRE/AHRI_TRE.jl/database/TRE.sqlite"
 # db = SQLite.DB(db_path)
 
 @info "===== Get variables and descriptions for all variables"
 
 # Load database
-dbname = "RDA"
-db = opendatabase(ENV["RDA_DATABASE_PATH"],dbname)
+dbname = "TRE"
+db = opendatabase(ENV["TRE_DATABASE_PATH"],dbname)
 filepath = joinpath(pwd(),"test")
 
 sql = "SELECT * FROM variables"

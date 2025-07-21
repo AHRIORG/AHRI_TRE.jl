@@ -10,10 +10,10 @@ using BenchmarkTools
 dotenv()
 
 function ingest_all()
-    createdatabase(ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], replace=true, sqlite=true)
+    createdatabase(ENV["TRE_DATABASE_PATH"], ENV["TRE_DBNAME"], replace=true, sqlite=true)
     source = CHAMPSSource()
-    ingest_source(source, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"], sqlite=true)
-    ingest_dictionary(source, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_DICTIONARY_PATH"],
+    ingest_source(source, ENV["TRE_DATABASE_PATH"], ENV["TRE_DBNAME"], ENV["DATA_INGEST_PATH"], sqlite=true)
+    ingest_dictionary(source, ENV["TRE_DATABASE_PATH"], ENV["TRE_DBNAME"], ENV["DATA_DICTIONARY_PATH"],
         ENV["DATA_INGEST_PATH"], sqlite=true)
     CHAMPSIngest = Ingest(source=source,
         death_file="CHAMPS_deid_basic_demographics",
@@ -28,12 +28,12 @@ function ingest_all()
         transform_desc="Ingest of CHAMPS Level-2 Data",
         code_reference="AHRI_TRE.ingest_data",
         author="Kobus Herbst; YUE CHU")
-    ingestion_id_sqlite = ingest_deaths(CHAMPSIngest, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"]; sqlite=true)
-    ingest_data(CHAMPSIngest, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"]; ingestion_id=ingestion_id_sqlite, sqlite=true)
+    ingestion_id_sqlite = ingest_deaths(CHAMPSIngest, ENV["TRE_DATABASE_PATH"], ENV["TRE_DBNAME"], ENV["DATA_INGEST_PATH"]; sqlite=true)
+    ingest_data(CHAMPSIngest, ENV["TRE_DATABASE_PATH"], ENV["TRE_DBNAME"], ENV["DATA_INGEST_PATH"]; ingestion_id=ingestion_id_sqlite, sqlite=true)
 
     source = COMSASource()
-    ingest_source(source, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"])
-    ingest_dictionary(source, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_DICTIONARY_PATH"],
+    ingest_source(source, ENV["TRE_DATABASE_PATH"], ENV["TRE_DBNAME"], ENV["DATA_INGEST_PATH"])
+    ingest_dictionary(source, ENV["TRE_DATABASE_PATH"], ENV["TRE_DBNAME"], ENV["DATA_DICTIONARY_PATH"],
         ENV["DATA_INGEST_PATH"], sqlite=true)
     COMSAIngest = Ingest(source=source,
         death_file="Comsa_WHO_VA_20230308",
@@ -47,8 +47,8 @@ function ingest_all()
         code_reference="AHRI_TRE.ingest_data",
         author="Kobus Herbst; YUE CHU"
     )
-    ingestion_id_sqlite = ingest_deaths(COMSAIngest, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"]; sqlite=true)
-    ingest_data(COMSAIngest, ENV["RDA_DATABASE_PATH"], ENV["RDA_DBNAME"], ENV["DATA_INGEST_PATH"]; ingestion_id=ingestion_id_sqlite, sqlite=true)
+    ingestion_id_sqlite = ingest_deaths(COMSAIngest, ENV["TRE_DATABASE_PATH"], ENV["TRE_DBNAME"], ENV["DATA_INGEST_PATH"]; sqlite=true)
+    ingest_data(COMSAIngest, ENV["TRE_DATABASE_PATH"], ENV["TRE_DBNAME"], ENV["DATA_INGEST_PATH"]; ingestion_id=ingestion_id_sqlite, sqlite=true)
 end
 
 @btime ingest_all()
