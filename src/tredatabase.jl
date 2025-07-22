@@ -12,13 +12,11 @@ function createdatabase(path, name; replace=false, sqlite=true)
         db = createdatabasesqlserver(path, name; replace=replace)
     end
     try
-        createsources(db)
-        createprotocols(db)
+        createstudies(db)
         createtransformations(db)
         createvariables(db)
         createdatasets(db)
-        createinstruments(db)
-        createdeaths(db)
+        createentities(db)
         createmapping(db)
         return nothing
     finally
@@ -358,14 +356,23 @@ function selectsourcesites(db::ODBC.Connection, source::AbstractSource)
     return DBInterface.execute(db, sql, iterate_rows=true) |> DataFrame
 end
 """
-    createsources(db::SQLite.DB)
+    createstudies(db::SQLite.DB)
 
 Creates tables to record a source and associated site/s for deaths contributed to the TRE
 """
-function createsources(db::SQLite.DB)
+function createstudies(db::SQLite.DB)
     sql = raw"""
-    CREATE TABLE "sources" (
-    "source_id" INTEGER NOT NULL PRIMARY KEY,
+    CREATE TABLE "study_types" (
+    "study_type_id" INTEGER NOT NULL PRIMARY KEY,
+    "name" TEXT NOT NULL,
+    "description" TEXT
+    );
+    """
+    DBInterface.execute(db, sql)
+
+    sql = raw"""
+    CREATE TABLE "studies" (
+    "study_id" INTEGER NOT NULL PRIMARY KEY,
     "name" TEXT NOT NULL,
     "study_type_id" INTEGER,
     CONSTRAINT "fk_sources_study_type_id" FOREIGN KEY ("study_type_id") REFERENCES "study_types" ("study_type_id") ON DELETE CASCADE ON UPDATE RESTRICT
@@ -373,36 +380,7 @@ function createsources(db::SQLite.DB)
     """
     DBInterface.execute(db, sql)
 
-    sql = raw"""
-    CREATE TABLE "study_types" (
-    "study_type_id" INTEGER NOT NULL PRIMARY KEY,
-    "name" TEXT NOT NULL
-    );
-    """
-    DBInterface.execute(db, sql)
-
-    sql = raw"""
-    CREATE TABLE "sites" (
-    "site_id" INTEGER NOT NULL PRIMARY KEY,
-    "site_name" TEXT NOT NULL,
-    "country_name" TEXT NOT NULL,
-    "country_iso3" TEXT NOT NULL,
-    "source_id" INTEGER NOT NULL,
-    CONSTRAINT "fk_sites_source_id" FOREIGN KEY ("source_id") REFERENCES "sources" ("source_id") ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE UNIQUE INDEX "i_source_name"
-    ON "sites" (
-    "source_id" ASC,
-    "site_name" ASC
-    );
-    """
-    DBInterface.execute(db, sql)
-
-    study_types = initstudytypes()
-    savedataframe(db, study_types, "study_types")
+    DBInterface.execute(db, initstudytypes())
 
     return nothing
 end
@@ -412,216 +390,53 @@ end
 
 Default transformation types
 """
-initstudytypes() = DataFrame([(study_type_id=TRE_STUDY_TYPE_DSS, name="Demographic Surveillance"),
-    (study_type_id=TRE_STUDY_TYPE_COHORT, name="Cohort study"),
-    (study_type_id=TRE_STUDY_TYPE_SURVEY, name="Cross-sectional survey"),
-    (study_type_id=TRE_STUDY_TYPE_PANEL, name="Panel data")])
+initstudytypes() = """
+    -- Insert the values
+    INSERT INTO study_types (study_type_id, name, description) VALUES
+    (1,  'HDSS', 'Health and Demographic Surveillance System'),
+    (2,  'COHORT', 'Cohort Study'),
+    (3,  'SURVEY', 'Cross-sectional Survey'),
+    (4,  'PANEL', 'Longitudinal/Panel Survey'),
+    (5,  'CASE_CONTROL', 'Case-Control Study'),
+    (6,  'RCT', 'Randomized Controlled Trial'),
 
+    -- Quantitative
+    (7,  'QUASI_EXPERIMENTAL', 'Quasi-experimental Study'),
+    (8,  'NATURAL_EXPERIMENT', 'Natural Experiment'),
+    (9,  'FIELD_EXPERIMENT', 'Field Experiment'),
+    (10, 'LAB_EXPERIMENT', 'Laboratory Experiment'),
+
+    -- Qualitative
+    (11, 'QUALITATIVE_INTERVIEW', 'In-depth or Key Informant Interviews'),
+    (12, 'FOCUS_GROUP', 'Focus Group Discussion'),
+    (13, 'ETHNOGRAPHY', 'Ethnographic Study'),
+    (14, 'PARTICIPATORY', 'Participatory Action Research'),
+    (15, 'CASE_STUDY', 'Case Study'),
+
+    -- Mixed methods
+    (16, 'MIXED_METHODS', 'Mixed Methods Study'),
+
+    -- Secondary / Desk Review
+    (17, 'SECONDARY_ANALYSIS', 'Secondary Data Analysis'),
+    (18, 'DESK_REVIEW', 'Desk or Literature Review'),
+
+    -- Social / Behavioural
+    (19, 'TIME_USE', 'Time Use Study'),
+    (20, 'DIARY', 'Diary Study'),
+    (21, 'LONGITUDINAL_OBSERVATION', 'Longitudinal Observational Study'),
+
+    -- Simulation / Modelling
+    (22, 'SIMULATION', 'Simulation Study'),
+    (23, 'AGENT_BASED_MODEL', 'Agent-based Modelling'),
+    (24, 'STATISTICAL_MODEL', 'Statistical Modelling Study'),
+    (25, 'SYSTEM_DYNAMICS', 'System Dynamics Modelling'),
+
+    -- Genomics / Biomedical
+    (26, 'GENOMICS', 'Genomics Study'),
+    (27, 'MULTIOMICS', 'Multi-omics Study (e.g., proteomics, metabolomics)'),
+    (28, 'BIOBANK', 'Biobank-based Study'),
+    (29, 'PHARMACOGENOMICS', 'Pharmacogenomics Study');
 """
-    createsources(db::ODBC.Connection)
-
-Creates tables to record a source and associated site/s for deaths contributed to the TRE
-"""
-function createsources(db::ODBC.Connection)
-    sql = raw"""
-    CREATE TABLE [sources] (
-        [source_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [name] NVARCHAR(255) NOT NULL,
-        [pi_name] NVARCHAR(255) NOT NULL,
-        [pi_affiliation] NVARCHAR(255) NOT NULL,
-        [funder] NVARCHAR(255) NOT NULL,
-        [funder_abbr] NVARCHAR(255) NOT NULL
-    );
-    """
-    DBInterface.execute(db, sql)
-
-    sql = raw"""
-    CREATE TABLE [sites] (
-        [site_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [site_name] NVARCHAR(255) NOT NULL,
-        [country_name] NVARCHAR(255) NOT NULL,
-        [country_iso3] NCHAR(3) NOT NULL,
-        [source_id] INT NOT NULL,
-        CONSTRAINT [fk_sites_source_id] FOREIGN KEY ([source_id]) REFERENCES [sources] ([source_id]) ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE UNIQUE INDEX [i_source_name]
-    ON [sites] (
-        [source_id] ASC,
-        [site_name] ASC
-    );
-    """
-    DBInterface.execute(db, sql)
-
-    sql = raw"""
-    CREATE TABLE [source_collection] (
-        [source_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [source_cycle] NVARCHAR(255),
-        [collection_start] NVARCHAR(255),
-        [collection_end] NVARCHAR(255),
-        [period_start] NVARCHAR(255),
-        [period_end] NVARCHAR(255),
-        PRIMARY KEY ([source_id]),
-        CONSTRAINT [fk_sites_source_id] FOREIGN KEY ([source_id]) REFERENCES [sources] ([source_id]) ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-
-    return nothing
-end
-
-"""
-    createprotocols(db::SQLite.DB)
-
-Create tables to record information about protocols and the ethics approvals for those protocols
-"""
-function createprotocols(db::SQLite.DB)
-    sql = raw"""
-    CREATE TABLE "ethics" (
-    "ethics_id" INTEGER NOT NULL PRIMARY KEY,
-    "source_id" INTEGER NOT NULL,
-    "name" TEXT NOT NULL,
-    "ethics_committee" TEXT NOT NULL,
-    "ethics_reference" TEXT NOT NULL,
-    CONSTRAINT "fk_ethics_source_id" FOREIGN KEY ("source_id") REFERENCES "sources" ("source_id") ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE "ethics_documents" (
-    "ethics_document_id" INTEGER NOT NULL PRIMARY KEY,
-    "ethics_id" INTEGER NOT NULL,
-    "name" TEXT NOT NULL,
-    "description" TEXT NULL,
-    "document" BLOB,
-    CONSTRAINT "fk_ethics_documents_ethics_id" FOREIGN KEY ("ethics_id") REFERENCES "ethics" ("ethics_id") ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE UNIQUE INDEX "i_ethic_name"
-    ON "ethics_documents" (
-    "ethics_id" ASC,
-    "name" ASC
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE "protocols" (
-    "protocol_id" INTEGER NOT NULL PRIMARY KEY,
-    "name" TEXT NOT NULL,
-    "description" TEXT NOT NULL,
-    "ethics_id" INTEGER,
-    CONSTRAINT "fk_protocols_ethics_id" FOREIGN KEY ("ethics_id") REFERENCES "ethics" ("ethics_id") ON DELETE NO ACTION ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE UNIQUE INDEX "i_protocol_name"
-    ON "protocols" (
-    "name" ASC
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE "site_protocols" (
-    "site_id" INTEGER NOT NULL,
-    "protocol_id" INTEGER NOT NULL,
-    PRIMARY KEY ("site_id", "protocol_id"),
-    CONSTRAINT "fk_site_protocols_site_id" FOREIGN KEY ("site_id") REFERENCES "sites" ("site_id") ON DELETE CASCADE ON UPDATE RESTRICT,
-    CONSTRAINT "fk_site_protocols_protocol_id" FOREIGN KEY ("protocol_id") REFERENCES "protocols" ("protocol_id") ON DELETE CASCADE ON UPDATE RESTRICT
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE "protocol_documents" (
-    "protocol_document_id" INTEGER NOT NULL PRIMARY KEY,
-    "protocol_id" INTEGER NOT NULL,
-    "name" TEXT NOT NULL,
-    "document" BLOB,
-    CONSTRAINT "fk_protocol_documents_protocol_id" FOREIGN KEY ("protocol_id") REFERENCES "protocols" ("protocol_id") ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    return nothing
-end
-"""
-    createprotocols(db::ODBC.Connection)
-
-Create tables to record information about protocols and the ethics approvals for those protocols
-"""
-function createprotocols(db::ODBC.Connection)
-    sql = raw"""
-    CREATE TABLE [ethics] (
-        [ethics_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [source_id] INT NOT NULL,
-        [name] NVARCHAR(255) NOT NULL,
-        [ethics_committee] NVARCHAR(255) NOT NULL,
-        [ethics_reference] NVARCHAR(255) NOT NULL,
-        CONSTRAINT [fk_ethics_source_id] FOREIGN KEY ([source_id]) REFERENCES [sources] ([source_id]) ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE [ethics_documents] (
-        [ethics_document_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [ethics_id] INT NOT NULL,
-        [name] NVARCHAR(255) NOT NULL,
-        [description] NVARCHAR(MAX) NULL,
-        [document] VARBINARY(MAX),  -- This is the closest equivalent to BLOB in SQL Server
-        CONSTRAINT [fk_ethics_documents_ethics_id] FOREIGN KEY ([ethics_id]) REFERENCES [ethics] ([ethics_id]) ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE UNIQUE INDEX [i_ethic_name]
-    ON [ethics_documents] (
-        [ethics_id] ASC,
-        [name] ASC
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE [protocols] (
-        [protocol_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [name] NVARCHAR(255) NOT NULL,
-        [description] NVARCHAR(MAX) NOT NULL,
-        [ethics_id] INT,
-        CONSTRAINT [fk_protocols_ethics_id] FOREIGN KEY ([ethics_id]) REFERENCES [ethics] ([ethics_id]) ON DELETE NO ACTION ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE UNIQUE INDEX [i_protocol_name]
-    ON [protocols] (
-        [name] ASC
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE [site_protocols] (
-        [site_id] INT NOT NULL,
-        [protocol_id] INT NOT NULL,
-        PRIMARY KEY ([site_id], [protocol_id]),
-        CONSTRAINT [fk_site_protocols_site_id] FOREIGN KEY ([site_id]) REFERENCES [sites] ([site_id]) ON DELETE CASCADE ON UPDATE NO ACTION,
-        CONSTRAINT [fk_site_protocols_protocol_id] FOREIGN KEY ([protocol_id]) REFERENCES [protocols] ([protocol_id]) ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE [protocol_documents] (
-        [protocol_document_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [protocol_id] INT NOT NULL,
-        [name] NVARCHAR(255) NOT NULL,
-        [document] VARBINARY(MAX),  -- BLOB equivalent in SQL Server
-        CONSTRAINT [fk_protocol_documents_protocol_id] FOREIGN KEY ([protocol_id]) REFERENCES [protocols] ([protocol_id]) ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    return nothing
-end
 """
     createtransformations(db)
 
@@ -659,10 +474,10 @@ function createtransformations(db::SQLite.DB)
     sql = raw"""
     CREATE TABLE "data_ingestions" (
     "data_ingestion_id" INTEGER NOT NULL PRIMARY KEY,
-    "source_id" INTEGER NOT NULL,
+    "study_id" INTEGER NOT NULL,
     "date_received" DATE NOT NULL,
     "description" TEXT,
-    CONSTRAINT "fk_data_ingestions_source_id" FOREIGN KEY ("source_id") REFERENCES "sources" ("source_id") ON DELETE CASCADE ON UPDATE RESTRICT
+    CONSTRAINT "fk_data_ingestions_source_id" FOREIGN KEY ("study_id") REFERENCES "studies" ("study_id") ON DELETE CASCADE ON UPDATE RESTRICT
     );
     """
     DBInterface.execute(db, sql)
@@ -686,61 +501,6 @@ Default transformation statuses
 """
 initstatuses() = DataFrame([(transformation_status_id=TRE_TRANSFORMATION_STATUS_UNVERIFIED, name="Unverified"),
     (transformation_status_id=TRE_TRANSFORMATION_STATUS_VERIFIED, name="Verified")])
-
-"""
-    createtransformations(db::ODBC.Connection)
-
-Create tables to record data transformations and data ingests
-"""
-function createtransformations(db::ODBC.Connection)
-    sql = raw"""
-    CREATE TABLE [transformation_types] (
-        [transformation_type_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [name] NVARCHAR(255) NOT NULL
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE [transformation_statuses] (
-        [transformation_status_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [name] NVARCHAR(255) NOT NULL
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE [transformations] (
-        [transformation_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [transformation_type_id] INT NOT NULL,
-        [transformation_status_id] INT NOT NULL,
-        [description] NVARCHAR(MAX) NOT NULL,
-        [code_reference] VARBINARY(MAX) NOT NULL,
-        [date_created] DATE NOT NULL,
-        [created_by] NVARCHAR(255) NOT NULL,
-        CONSTRAINT [fk_transformations_transformation_type_id] FOREIGN KEY ([transformation_type_id]) REFERENCES [transformation_types] ([transformation_type_id]) ON DELETE CASCADE ON UPDATE NO ACTION,
-        CONSTRAINT [fk_transformations_transformation_status_id] FOREIGN KEY ([transformation_status_id]) REFERENCES [transformation_statuses] ([transformation_status_id]) ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE [data_ingestions] (
-        [data_ingestion_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [source_id] INT NOT NULL,
-        [date_received] DATE NOT NULL,
-        [description] NVARCHAR(MAX),
-        CONSTRAINT [fk_data_ingestions_source_id] FOREIGN KEY ([source_id]) REFERENCES [sources] ([source_id]) ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    types = inittypes()
-    statuses = initstatuses()
-    identityinserton(db, "transformation_types")
-    savedataframe(db, types, "transformation_types")
-    identityinsertoff(db, "transformation_types")
-    identityinserton(db, "transformation_statuses")
-    savedataframe(db, statuses, "transformation_statuses")
-    identityinsertoff(db, "transformation_statuses")
-    return nothing
-end
 """
     createvariables(db)
 
@@ -835,106 +595,6 @@ function createvariables(db::SQLite.DB)
     return nothing
 end
 """
-    createvariables(db::ODBC.Connection)
-
-Create tables to record value types, variables and vocabularies
-"""
-function createvariables(db::ODBC.Connection)
-    sql = raw"""
-    CREATE TABLE [value_types] (
-        [value_type_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [value_type] NVARCHAR(255) NOT NULL,
-        [description] NVARCHAR(MAX)
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE UNIQUE INDEX [i_value_type]
-    ON [value_types] (
-        [value_type] ASC
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE [vocabularies] (
-        [vocabulary_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [name] NVARCHAR(255) NOT NULL,
-        [description] NVARCHAR(MAX)
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE [vocabulary_items] (
-        [vocabulary_item_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [vocabulary_id] INT NOT NULL,
-        [value] NVARCHAR(255) NOT NULL,
-        [code] NVARCHAR(255) NOT NULL,
-        [description] NVARCHAR(MAX),
-        CONSTRAINT [fk_vocabulary_items] FOREIGN KEY ([vocabulary_id]) 
-            REFERENCES [vocabularies]([vocabulary_id]) 
-            ON DELETE NO ACTION ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE [domains] (
-        [domain_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [name] NVARCHAR(255) NOT NULL,
-        [description] NVARCHAR(MAX) NOT NULL
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE UNIQUE INDEX [i_domain_name]
-    ON [domains] (
-        [name] ASC
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE [variables] (
-        [variable_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [domain_id] INT NOT NULL,
-        [name] NVARCHAR(255) NOT NULL,
-        [value_type_id] INT NOT NULL,
-        [vocabulary_id] INT,
-        [description] NVARCHAR(MAX),
-        [note] NVARCHAR(MAX),
-        [keyrole] NVARCHAR(255),
-        CONSTRAINT [fk_variables_domain_id] FOREIGN KEY ([domain_id]) 
-            REFERENCES [domains]([domain_id]) ON DELETE NO ACTION ON UPDATE NO ACTION,
-        CONSTRAINT [fk_variables_value_type_id] FOREIGN KEY ([value_type_id]) 
-            REFERENCES [value_types]([value_type_id]) ON DELETE NO ACTION ON UPDATE NO ACTION,
-        CONSTRAINT [fk_variables_vocabulary_id] FOREIGN KEY ([vocabulary_id]) 
-            REFERENCES [vocabularies]([vocabulary_id]) ON DELETE NO ACTION ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE UNIQUE INDEX [i_variables_domain_name]
-    ON [variables] (
-        [domain_id] ASC,
-        [name] ASC
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE [vocabulary_mapping] (
-        [vocabulary_mapping_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [from_vocabulary_item] INT NOT NULL,
-        [to_vocabulary_item] INT NOT NULL,
-        CONSTRAINT [fk_vocabulary_mapping_from] FOREIGN KEY ([from_vocabulary_item]) REFERENCES [vocabulary_items] ([vocabulary_item_id]) ON DELETE NO ACTION ON UPDATE NO ACTION,
-        CONSTRAINT [fk_vocabulary_mapping_to] FOREIGN KEY ([to_vocabulary_item]) REFERENCES [vocabulary_items] ([vocabulary_item_id]) ON DELETE NO ACTION ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    types = initvalue_types()
-    identityinserton(db, "value_types")
-    savedataframe(db, types, "value_types")
-    identityinsertoff(db, "value_types")
-    return nothing
-end
-"""
     initvalue_types()
 
 Add default value types
@@ -1024,18 +684,6 @@ function createdatasets(db::SQLite.DB)
     """
     DBInterface.execute(db, sql)
     sql = raw"""
-    CREATE TABLE "data" (
-    "row_id" INTEGER NOT NULL,
-    "variable_id" INTEGER NOT NULL,
-    "value" TEXT NULL,
-    PRIMARY KEY ("row_id", "variable_id"),
-    CONSTRAINT "fk_data_row_id" FOREIGN KEY ("row_id") REFERENCES "datarows" ("row_id") ON DELETE CASCADE ON UPDATE RESTRICT,
-    CONSTRAINT "fk_data_variable_id" FOREIGN KEY ("variable_id") REFERENCES "variables" ("variable_id") ON DELETE CASCADE ON UPDATE RESTRICT,
-    CONSTRAINT "unique_data" UNIQUE ("row_id" ASC, "variable_id" ASC)
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
     CREATE TABLE "transformation_inputs" (
     "transformation_id" INTEGER NOT NULL,
     "dataset_id" INTEGER NOT NULL,
@@ -1087,293 +735,39 @@ Default unit of analysis
 """
 initunitanalysis() = DataFrame([(unit_of_analysis_id=TRE_UNIT_OF_ANALYSIS_INDIVIDUAL, name="Individual"),
     (unit_of_analysis_id=TRE_UNIT_OF_ANALYSIS_AGGREGATION, name="Aggregation")])
-
 """
-    createdatasets(db::ODBC.Connection)
-
-Create tables to record datasets, rows, data and links to the transformations that use/created the datasets
-"""
-function createdatasets(db::ODBC.Connection)
-    sql = raw"""
-    CREATE TABLE [datasets] (
-        [dataset_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [name] NVARCHAR(255) NOT NULL,
-        [date_created] DATE NOT NULL,
-        [description] NVARCHAR(MAX),
-
-        [unit_of_analysis_id] INTEGER,
-        [repository_id] NVARCHAR(255),
-        [doi] NVARCHAR(255)
-    );
-    """
-    DBInterface.execute(db, sql)
-
-    sql = raw"""
-    CREATE TABLE [repository] (
-        [repository_id] NVARCHAR(255) NOT NULL,
-        [repository_ddi_id] NVARCHAR(255),
-        [repository_ddi] VARBINARY(MAX),
-        [repository_rdf] VARBINARY(MAX),
-        PRIMARY KEY ([repository_id]),
-        CONSTRAINT [fk_repository_id] FOREIGN KEY ([repository_id]) REFERENCES [datasets] ([repository_id]) ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-
-    sql = raw"""
-    CREATE TABLE [datarows] (
-        [row_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [dataset_id] INT NOT NULL,
-        CONSTRAINT [fk_datarows_dataset_id] FOREIGN KEY ([dataset_id]) REFERENCES [datasets] ([dataset_id]) ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-
-    sql = raw"""
-    CREATE TABLE [data] (
-        [row_id] INT NOT NULL,
-        [variable_id] INT NOT NULL,
-        [value_integer] INT NULL,
-        [value_float] FLOAT NULL,
-        [value_string] NVARCHAR(4000) NULL,
-        [value_datetime] DATETIME NULL,
-        [value_binary] VARBINARY(MAX) NULL,
-        PRIMARY KEY ([row_id], [variable_id]),
-        CONSTRAINT [fk_data_row_id] FOREIGN KEY ([row_id]) REFERENCES [datarows] ([row_id]) ON DELETE CASCADE ON UPDATE NO ACTION,
-        CONSTRAINT [fk_data_variable_id] FOREIGN KEY ([variable_id]) REFERENCES [variables] ([variable_id]) ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE [transformation_inputs] (
-        [transformation_id] INT NOT NULL,
-        [dataset_id] INT NOT NULL,
-        PRIMARY KEY ([transformation_id], [dataset_id]),
-        CONSTRAINT [fk_transformation_inputs_transformation_id] FOREIGN KEY ([transformation_id]) REFERENCES [transformations] ([transformation_id]) ON DELETE CASCADE ON UPDATE NO ACTION,
-        CONSTRAINT [fk_transformation_inputs_dataset_id] FOREIGN KEY ([dataset_id]) REFERENCES [datasets] ([dataset_id]) ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE [transformation_outputs] (
-        [transformation_id] INT NOT NULL,
-        [dataset_id] INT NOT NULL,
-        PRIMARY KEY ([transformation_id], [dataset_id]),
-        CONSTRAINT [fk_transformation_outputs_transformation_id] FOREIGN KEY ([transformation_id]) REFERENCES [transformations] ([transformation_id]) ON DELETE CASCADE ON UPDATE NO ACTION,
-        CONSTRAINT [fk_transformation_outputs_dataset_id] FOREIGN KEY ([dataset_id]) REFERENCES [datasets] ([dataset_id]) ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE [dataset_variables] (
-        [dataset_id] INT NOT NULL,
-        [variable_id] INT NOT NULL,
-        PRIMARY KEY ([dataset_id], [variable_id]),
-        CONSTRAINT [fk_dataset_variables_variable_id] FOREIGN KEY ([variable_id]) REFERENCES [variables] ([variable_id]) ON DELETE NO ACTION ON UPDATE NO ACTION,
-        CONSTRAINT [fk_dataset_variables_dataset_id] FOREIGN KEY ([dataset_id]) REFERENCES [datasets] ([dataset_id]) ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE [ingest_datasets] (
-        [ingest_dataset_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [data_ingestion_id] INT NOT NULL,
-        [transformation_id] INT NOT NULL,
-        [dataset_id] INT NOT NULL,
-        CONSTRAINT [fk_ingest_datasets_data_ingestion_id] FOREIGN KEY ([data_ingestion_id]) REFERENCES [data_ingestions] ([data_ingestion_id]) ON DELETE CASCADE ON UPDATE NO ACTION,
-        CONSTRAINT [fk_ingest_datasets_transformation_id] FOREIGN KEY ([transformation_id]) REFERENCES [transformations] ([transformation_id]) ON DELETE CASCADE ON UPDATE NO ACTION,
-        CONSTRAINT [fk_ingest_datasets_dataset_id] FOREIGN KEY ([dataset_id]) REFERENCES [datasets] ([dataset_id]) ON DELETE NO ACTION ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    return nothing
-end
-"""
-    createinstruments(db::SQLite.DB)
-
-Create tables to record data collection instruments, and their associated protocols and datasets
-"""
-function createinstruments(db::SQLite.DB)
-    sql = raw"""
-    CREATE TABLE "instruments" (
-    "instrument_id" INTEGER NOT NULL PRIMARY KEY,
-    "name" TEXT NOT NULL,
-    "description" TEXT NOT NULL,
-    "collection_cycle" TEXT,
-    "collection_start" DATE,
-    "collection_end" DATE
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE UNIQUE INDEX "i_instrument_name"
-    ON "instruments" (
-    "name" ASC
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE "instrument_datasets" (
-    "instrument_id" INTEGER NOT NULL,
-    "dataset_id" INTEGER NOT NULL,
-    PRIMARY KEY ("instrument_id", "dataset_id"),
-    CONSTRAINT "fk_instrument_datasets_instrument_id" FOREIGN KEY ("instrument_id") REFERENCES "instruments" ("instrument_id") ON DELETE NO ACTION ON UPDATE NO ACTION,
-    CONSTRAINT "fk_instrument_datasets_dataset_id" FOREIGN KEY ("dataset_id") REFERENCES "datasets" ("dataset_id") ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-
-    sql = raw"""
-    CREATE TABLE "instrument_documents" (
-    "intrument_document_id" INTEGER NOT NULL,
-    "instrument_id" INTEGER NOT NULL,
-    "name" TEXT NOT NULL,
-    "document" BLOB,
-    PRIMARY KEY ("intrument_document_id"),
-    CONSTRAINT "fk_instrument_documents_instrument_id" FOREIGN KEY ("instrument_id") REFERENCES "instruments" ("instrument_id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "u_instrument_documents" UNIQUE ("instrument_id" ASC, "name" ASC)
-    );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE "protocol_instruments" (
-    "protocol_id" INTEGER NOT NULL,
-    "instrument_id" INTEGER NOT NULL,
-    PRIMARY KEY ("protocol_id", "instrument_id"),
-    CONSTRAINT "fk_protocol_instruments_protocol_id" FOREIGN KEY ("protocol_id") REFERENCES "protocols" ("protocol_id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "fk_protocol_instruments" FOREIGN KEY ("instrument_id") REFERENCES "instruments" ("instrument_id") ON DELETE CASCADE ON UPDATE NO ACTION
-    );
-    """
-    DBInterface.execute(db, sql)
-    return nothing
-end
-"""
-    createinstruments(db::ODBC.Connection)
-
-Create tables to record data collection instruments, and their associated protocols and datasets
-"""
-function createinstruments(db::ODBC.Connection)
-    sql = raw"""
-    CREATE TABLE [instruments] (
-        [instrument_id] INT NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [name] NVARCHAR(255) NOT NULL,
-        [description] NVARCHAR(MAX) NOT NULL,
-        [collection_cycle] NVARCHAR(255),
-        [collection_start] DATE,
-        [collection_end] DATE
-    )
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE UNIQUE INDEX [i_instrument_name]
-    ON [instruments] (
-        [name] ASC
-    )
-    """
-    DBInterface.execute(db, sql)
-    # !!! NEEDS UPDATE TO instrument_datasets
-    sql = raw"""
-    CREATE TABLE [instrument_datasets] (
-        [instrument_id] INTEGER NOT NULL,
-        [dataset_id] INTEGER NOT NULL,
-        PRIMARY KEY ([instrument_id], [dataset_id]),
-        CONSTRAINT [fk_instrument_datasets_instrument_id] FOREIGN KEY ([instrument_id]) REFERENCES [instruments] ([instrument_id]) ON DELETE NO ACTION ON UPDATE NO ACTION,
-        CONSTRAINT [fk_instrument_datasets_dataset_id] FOREIGN KEY ([dataset_id]) REFERENCES [datasets] ([dataset_id]) ON DELETE CASCADE ON UPDATE NO ACTION
-    )
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE [instrument_documents] (
-        [intrument_document_id] INTEGER NOT NULL PRIMARY KEY IDENTITY(1,1),
-        [instrument_id] INTEGER NOT NULL,
-        [name] NVARCHAR(255) NOT NULL,
-        [document] VARBINARY(MAX),
-        CONSTRAINT [fk_instrument_documents_instrument_id] FOREIGN KEY ([instrument_id]) REFERENCES [instruments] ([instrument_id]) ON DELETE CASCADE ON UPDATE NO ACTION,
-        CONSTRAINT [u_instrument_documents] UNIQUE ([instrument_id], [name])
-    )
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE [protocol_instruments] (
-        [protocol_id] INT NOT NULL,
-        [instrument_id] INT NOT NULL,
-        PRIMARY KEY ([protocol_id], [instrument_id]),
-        CONSTRAINT [fk_protocol_instruments_protocol_id] FOREIGN KEY ([protocol_id]) REFERENCES [protocols] ([protocol_id]) ON DELETE CASCADE,
-        CONSTRAINT [fk_protocol_instruments_instrument_id] FOREIGN KEY ([instrument_id]) REFERENCES [instruments] ([instrument_id]) ON DELETE CASCADE
-    )
-    """
-    DBInterface.execute(db, sql)
-    return nothing
-end
-"""
-    createdeaths(db)
+    createentities(db)
 
 Create tables to store deaths, and their association with data rows and data ingests
 """
-function createdeaths(db::SQLite.DB)
+function createentities(db::SQLite.DB)
     sql = raw"""
-    CREATE TABLE "deaths" (
-    "death_id" INTEGER NOT NULL PRIMARY KEY,
-    "site_id" INTEGER NOT NULL,
+    CREATE TABLE "entities" (
+    "entity_id" INTEGER NOT NULL PRIMARY KEY,
+    "study_id" INTEGER NOT NULL,
     "external_id" TEXT NOT NULL,
     "data_ingestion_id" INTEGER NOT NULL,
-    CONSTRAINT "fk_deaths_site_id" FOREIGN KEY ("site_id") REFERENCES "sites" ("site_id") ON DELETE NO ACTION ON UPDATE NO ACTION,
+    CONSTRAINT "fk_deaths_study_id" FOREIGN KEY ("study_id") REFERENCES "studies" ("study_id") ON DELETE NO ACTION ON UPDATE NO ACTION,
     CONSTRAINT "fk_deaths_data_ingestion_id" FOREIGN KEY ("data_ingestion_id") REFERENCES "data_ingestions" ("data_ingestion_id") ON DELETE NO ACTION ON UPDATE NO ACTION,
-    CONSTRAINT "unique_external_id" UNIQUE ("site_id" ASC, "external_id" ASC)
+    CONSTRAINT "unique_external_id" UNIQUE ("study_id" ASC, "external_id" ASC)
     );
     """
     DBInterface.execute(db, sql)
     sql = raw"""
-    CREATE INDEX "i_deaths_site_id"
+    CREATE INDEX "i_deaths_study_id"
     ON "deaths" (
-    "site_id" ASC
+    "study_id" ASC
     );
     """
     DBInterface.execute(db, sql)
     sql = raw"""
-    CREATE TABLE "death_rows" (
-    "death_id" INTEGER NOT NULL,
+    CREATE TABLE "entity_rows" (
+    "entity_id" INTEGER NOT NULL,
     "row_id" INTEGER NOT NULL,
-    PRIMARY KEY ("death_id", "row_id"),
-    CONSTRAINT "fk_death_rows_death_id" FOREIGN KEY ("death_id") REFERENCES "deaths" ("death_id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "fk_death_rows_row_id" FOREIGN KEY ("row_id") REFERENCES "datarows" ("row_id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "unique_rows" UNIQUE ("death_id" ASC, "row_id" ASC)
-    );
-    """
-    DBInterface.execute(db, sql)
-    return nothing
-end
-"""
-    createdeaths(db::ODBC.Connection)
-
-Create tables to store deaths, and their association with data rows and data ingests
-"""
-function createdeaths(db::ODBC.Connection)
-    sql = raw"""
-    CREATE TABLE [deaths] (
-        [death_id] INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
-        [site_id] INT NOT NULL,
-        [external_id] NVARCHAR(127) NOT NULL,
-        [data_ingestion_id] INT NOT NULL,
-        CONSTRAINT [fk_deaths_site_id] FOREIGN KEY ([site_id]) REFERENCES [sites] ([site_id]) ON DELETE NO ACTION,
-        CONSTRAINT [fk_deaths_data_ingestion_id] FOREIGN KEY ([data_ingestion_id]) REFERENCES [data_ingestions] ([data_ingestion_id]) ON DELETE NO ACTION,
-        CONSTRAINT [unique_external_id] UNIQUE ([site_id], [external_id])
-    )
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE INDEX [i_deaths_site_id]
-    ON [deaths] ([site_id]);
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE [death_rows] (
-        [death_id] INT NOT NULL,
-        [row_id] INT NOT NULL,
-        PRIMARY KEY ([death_id], [row_id]),
-        CONSTRAINT [fk_death_rows_death_id] FOREIGN KEY ([death_id]) REFERENCES [deaths] ([death_id]) ON DELETE CASCADE ON UPDATE NO ACTION,
-        CONSTRAINT [fk_death_rows_row_id] FOREIGN KEY ([row_id]) REFERENCES [datarows] ([row_id]) ON DELETE CASCADE ON UPDATE NO ACTION,
-        CONSTRAINT [unique_rows] UNIQUE ([death_id], [row_id])
+    PRIMARY KEY ("entity_id", "row_id"),
+    CONSTRAINT "fk_entity_rows_entity_id" FOREIGN KEY ("entity_id") REFERENCES "entities" ("entity_id") ON DELETE CASCADE ON UPDATE NO ACTION,
+    CONSTRAINT "fk_entity_rows_row_id" FOREIGN KEY ("row_id") REFERENCES "datarows" ("row_id") ON DELETE CASCADE ON UPDATE NO ACTION,
+    CONSTRAINT "unique_rows" UNIQUE ("entity_id" ASC, "row_id" ASC)
     );
     """
     DBInterface.execute(db, sql)
@@ -1399,84 +793,17 @@ The relationship to the PyCrossVA configuration file columns:
 """
 function createmapping(db::SQLite.DB)
     sql = raw"""
-        CREATE TABLE IF NOT EXISTS "variablemaps" (
-            "variablemap_id"	INTEGER NOT NULL PRIMARY KEY,
-            "name"	TEXT NOT NULL,
-            "instrument_id"	INTEGER NULL,
-            "source_domain" TEXT NULL,
-            "destination_domain" TEXT NULL,
-            CONSTRAINT "fk_variablemaps_instruments" FOREIGN KEY("instrument_id") REFERENCES "instruments"("instrument_id")
-        );
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    CREATE TABLE IF NOT EXISTS variablemappings (
-        variablemapping_id INTEGER NOT NULL PRIMARY KEY,
-        variablemap_id INTEGER NOT NULL,
-        destination_id INTEGER NOT NULL,
-        from_id INTEGER NULL,
-        operator TEXT NULL,
-        operants TEXT NULL,
-        prerequisite_id INTEGER NULL,
-        CONSTRAINT fk_variablemappings_variablemap_id FOREIGN KEY (variablemap_id) REFERENCES variablemaps (variablemap_id),
-        CONSTRAINT fk_variablemappings_destination_id FOREIGN KEY (destination_id) REFERENCES variables (variable_id),
-        CONSTRAINT fk_variablemappings_from_id FOREIGN KEY (from_id) REFERENCES variables (variable_id),
-        CONSTRAINT fk_variablemappings_prerequisite_id FOREIGN KEY (prerequisite_id) REFERENCES variables (variable_id)
+    CREATE TABLE "variable_mapping" (
+    "mapping_id" INTEGER NOT NULL PRIMARY KEY,
+    "from_variable_id" INTEGER NOT NULL,
+    "to_variable_id" INTEGER NOT NULL,
+    "operator" TEXT NOT NULL,
+    "operants" TEXT NOT NULL,
+    "prerequisite_id" INTEGER,
+    CONSTRAINT "fk_variable_mapping_from_variable_id" FOREIGN KEY ("from_variable_id") REFERENCES "variables" ("variable_id") ON DELETE CASCADE ON UPDATE NO ACTION,
+    CONSTRAINT "fk_variable_mapping_to_variable_id" FOREIGN KEY ("to_variable_id") REFERENCES "variables" ("variable_id") ON DELETE CASCADE ON UPDATE NO ACTION,
+    CONSTRAINT "fk_variable_mapping_prerequisite_id" FOREIGN KEY ("prerequisite_id") REFERENCES "variables" ("variable_id") ON DELETE CASCADE ON UPDATE NO ACTION
     );
-    """
-    DBInterface.execute(db, sql)
-    return nothing
-end
-
-"""
-    createmapping(db::ODBC.Connection)
-
-Create the table required for variable mapping. This table is used to map variables from one instrument to another. The table is created in the database provided as an argument.
-The variable mapping is based on the PyCrossVA approach.
-
-The relationship to the PyCrossVA configuration file columns:
-
-  * New Column Name = destination_id - the variable_id of the new column
-  * New Column Documentation = Stored in the variable table
-  * Source Column ID = from_id - the variable_id of the source variable
-  * Source Column Documentation = will be in the variables table
-  * Relationship = operator - the operator to be used to create the new variable
-  * Condition = operants - the operants to be used with the operator
-  * Prerequisite = prerequisite_id - the variable_id of the prerequisite variable
-
-"""
-function createmapping(db::ODBC.Connection)
-    sql = raw"""
-    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'variablemaps')
-    BEGIN
-        CREATE TABLE [variablemaps] (
-            [variablemap_id] INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
-            [name] NVARCHAR(255) NOT NULL,
-            [instrument_id] INT NULL,
-            [source_domain] NVARCHAR(255) NULL,
-            [destination_domain] NVARCHAR(255) NULL,
-            CONSTRAINT [fk_variablemaps_instruments] FOREIGN KEY ([instrument_id]) REFERENCES [instruments]([instrument_id])
-        );
-    END
-    """
-    DBInterface.execute(db, sql)
-    sql = raw"""
-    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'variablemappings')
-    BEGIN
-        CREATE TABLE [variablemappings] (
-            [variablemapping_id] INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
-            [variablemap_id] INT NOT NULL,
-            [destination_id] INT NOT NULL,
-            [from_id] INT NULL,
-            [operator] NVARCHAR(MAX) NULL,
-            [operants] NVARCHAR(MAX) NULL,
-            [prerequisite_id] INT NULL,
-            CONSTRAINT [fk_variablemappings_variablemap_id] FOREIGN KEY ([variablemap_id]) REFERENCES [variablemaps]([variablemap_id]),
-            CONSTRAINT [fk_variablemappings_destination_id] FOREIGN KEY ([destination_id]) REFERENCES [variables]([variable_id]),
-            CONSTRAINT [fk_variablemappings_from_id] FOREIGN KEY ([from_id]) REFERENCES [variables]([variable_id]),
-            CONSTRAINT [fk_variablemappings_prerequisite_id] FOREIGN KEY ([prerequisite_id]) REFERENCES [variables]([variable_id])
-        );
-    END
     """
     DBInterface.execute(db, sql)
     return nothing
