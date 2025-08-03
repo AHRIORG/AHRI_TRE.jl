@@ -2,6 +2,7 @@ module AHRI_TRE
 
 using DataFrames
 using SQLite
+using MySQL
 using DBInterface
 using DuckDB
 using ConfigEnv
@@ -19,8 +20,8 @@ using URIs
 export
     Vocabulary, VocabularyItem,
     DataDocument, DocCSV, DocXLSX, DocPDF, read_data,
-    AbstractStudy, rawSource, CHAMPSSource, COMSAMZSource, HEALSLSource, #Source structs
-    AbstractIngest, sourceIngest, CHAMPSIngest, COMSAMZIngest, HEALSLIngest, userIngest, #Ingest structs
+    AbstractStudy, 
+    AbstractIngest, sourceIngest, 
     ingest_study, datasetlakename,
     add_sites, add_instruments, add_protocols, add_ethics, add_study, add_domain,
     ingest_dictionary, ingest_deaths, ingest_data, save_dataset,
@@ -68,29 +69,6 @@ Base.@kwdef mutable struct StudyIngest <: AbstractIngest
     study::AbstractStudy = Study() # Study information
     ingested::DateTime = now() # Date of ingestion
     responsible::String = "0000-0000-0000-0000" # ORCID of the person responsible for ingestion
-end
-
-"""
-    ingest_study(study::AbstractStudy)
-
-TBW
-"""
-function ingest_study(study::AbstractStudy)
-    db, lake = opendatabase(dbpath, dbname, sqlite)
-    try
-        DBInterface.transaction(db) do
-
-            source_id = add_study(sudy.name, db)
-
-        end
-
-        return nothing
-    finally
-        DBInterface.close!(db)
-        if !isnothing(lake)
-            DBInterface.close!(lake)
-        end
-    end
 end
 
 """
