@@ -20,7 +20,7 @@ old_logger = global_logger(minlogger)
 
 try
   println("Execution started at: ", Dates.now())
-  createdatabase(ENV["TRE_SERVER"], ENV["TRE_USER"], ENV["TRE_PWD"], ENV["TRE_DBNAME"])
+  createdatabase(ENV["TRE_SERVER"], ENV["TRE_USER"], ENV["TRE_PWD"], ENV["TRE_DBNAME"], replace = true)
 finally
     global_logger(old_logger)  # Restore the old logger
 end

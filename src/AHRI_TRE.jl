@@ -1,7 +1,6 @@
 module AHRI_TRE
 
 using DataFrames
-using SQLite
 using MySQL
 using DBInterface
 using DuckDB
@@ -10,12 +9,13 @@ using Dates
 using Arrow
 using DataStructures
 using ODBC
-
+using Blake3Hash
 using CSV
 using XLSX
 using FileIO
 using Base64
 using URIs
+using UUIDs
 
 export
     Vocabulary, VocabularyItem,
@@ -23,17 +23,14 @@ export
     AbstractStudy, 
     AbstractIngest, sourceIngest, 
     ingest_study, datasetlakename,
-    add_sites, add_instruments, add_protocols, add_ethics, add_study, add_domain,
-    ingest_dictionary, ingest_deaths, ingest_data, save_dataset,
+    add_domain,
+    ingest_dictionary, save_dataset,
     read_variables, get_vocabulary, add_variables, add_vocabulary, lookup_variables,
-    add_datarows, add_data_column, death_in_ingest, get_last_deathingest, link_instruments, link_deathrows,
     get_namedkey, get_variable_id, get_variable, get_valuetype, get_datasetname, updatevalue, insertdata, insertwithidentity,
-    get_table, selectdataframe, prepareselectstatement, selectsourcesites, dataset_to_dataframe, dataset_to_arrow, dataset_to_csv,
+    get_table, selectdataframe, prepareselectstatement, dataset_to_dataframe, dataset_to_arrow, dataset_to_csv,
     dataset_variables, dataset_column, savedataframe, createdatabase, opendatabase
 
-#ODBC.bindtypes(x::Vector{UInt8}) = ODBC.API.SQL_C_BINARY, ODBC.API.SQL_LONGVARBINARY
-
-"""
+    """
 Structs for vocabulary
 """
 
@@ -72,24 +69,11 @@ Base.@kwdef mutable struct StudyIngest <: AbstractIngest
 end
 
 """
-    add_study(study_name, db::DBInterface.Connection)
-
-Add source `name` to the sources table, and returns the `source_id`
-"""
-function add_study(study_name::String, db::DBInterface.Connection)
-    id = get_source(db, study_name)
-    if ismissing(id)  # insert source
-        id = insertwithidentity(db, "studies", ["name"], [study_name], "study_id")
-    end
-    return id
-end
-
-"""
-    get_source(db::DBInterface.Connection, name)
+    get_study(db::DBInterface.Connection, name)
 
 Return the `source_id` of source `name`, returns `missing` if source doesn't exist
 """
-function get_source(db::DBInterface.Connection, name)
+function get_study(db::DBInterface.Connection, name)
     return get_namedkey(db, "studies", name, :study_id)
 end
 
@@ -122,45 +106,8 @@ if lake is not nothing, the dataset data is stored in the data lake.
 """
 function save_dataset(db::DBInterface.Connection, dataset::AbstractDataFrame, name::String, description::String, unit_of_analysis_id::Integer,
     domain_id::Integer, transformation_id::Integer, ingestion_id::Integer, lake::DBInterface.Connection=nothing)::Integer
-
-    variables = lookup_variables(db, names(dataset), domain_id)
-    transform!(variables, [:variable_id, :value_type_id] => ByRow((x, y) -> Tuple([x, y])) => :variable_id_type)
-
-    var_lookup = Dict{String,Tuple{Integer,Integer}}(zip(variables.name, variables.variable_id_type))
-
-    # Add dataset entry to datasets table
-    dataset_id = insertwithidentity(db, "datasets", ["name", "date_created", "description", "unit_of_analysis_id", "in_lake"],
-        [name, isa(db, SQLite.DB) ? Dates.format(today(), "yyyy-mm-dd") : today(), description, unit_of_analysis_id, isnothing(lake) ? 0 : 1], "dataset_id")
-
-    insertdata(db, "ingest_datasets", ["data_ingestion_id", "transformation_id", "dataset_id"],
-        [ingestion_id, transformation_id, dataset_id])
-    insertdata(db, "transformation_outputs", ["transformation_id", "dataset_id"],
-        [transformation_id, dataset_id])
-
-    savedataframe(db, select(variables, [] => Returns(dataset_id) => :dataset_id, :variable_id), "dataset_variables")
-
-    # RDALake: row_id is still used to link data rows to the death table
-    # Store datarows in datarows table and get row_ids 
-    datarows = add_datarows(db, nrow(dataset), dataset_id)
-
-    #prepare data for storage
-    d = hcat(datarows, dataset; makeunique=true, copycols=false) #add the row_id to each row of data
-
-    #RDALake: Complete dataset stored in data lake now
-    if !isnothing(lake)
-        @info "Saving dataset $name to data lake as '$(datasetlakename(dataset_id))'."
-        savedataframetolake(lake, d, datasetlakename(dataset_id), name * ": " * description)
-        @info "Dataset '$(datasetlakename(dataset_id))' saved to datalake."
-    else
-        #store whole column at a time
-        for col in propertynames(dataset)
-            variable_id, value_type = var_lookup[string(col)]
-            coldata = select(d, :row_id, col => :value; copycols=false)
-            add_data_column(db, variable_id, value_type, coldata)
-        end
-        @info "Dataset $name saved to database."
-    end
-    @info "Dataset $name ingested."
+    dataset_id = 0;
+   @info "Dataset $name ingested."
     return dataset_id
 end
 """
@@ -195,110 +142,10 @@ function savedataframetolake(lake::DBInterface.Connection, df::AbstractDataFrame
     DuckDB.unregister_table(lake, "__DF")
     return nothing
 end
-"""
-    add_datarows(db::SQLite.DB, nrow::Integer, dataset_id::Integer)
-
-    Define data rows in the datarows table
-"""
-function add_datarows(db::DBInterface.Connection, nrow::Integer, dataset_id::Integer)
-    stmt = prepareinsertstatement(db, "datarows", ["dataset_id"])
-    #Create a row_id for every row in the dataset
-    for i = 1:nrow
-        DBInterface.execute(stmt, [dataset_id])
-    end
-    return selectdataframe(db, "datarows", ["row_id"], ["dataset_id"], [dataset_id]) |> DataFrame
-end
-
-
-"""
-    add_data_column(db::SQLite.DB, variable_id, coldata)
-
-Insert data for a column of the source dataset
-"""
-function add_data_column(db::SQLite.DB, variable_id, value_type, coldata)
-    stmt = prepareinsertstatement(db, "data", ["row_id", "variable_id", "value"])
-    if eltype(coldata.value) <: TimeType
-        if value_type == TRE_TYPE_DATE
-            transform!(coldata, :value => ByRow(x -> !ismissing(x) ? Dates.format(x, "yyyy-mm-dd") : x) => :value)
-        elseif value_type == TRE_TYPE_TIME
-            transform!(coldata, :value => ByRow(x -> !ismissing(x) ? Dates.format(x, "HH:MM:SS.sss") : x) => :value)
-        elseif value_type == TRE_TYPE_DATETIME
-            transform!(coldata, :value => ByRow(x -> !ismissing(x) ? Dates.format(x, "yyyy-mm-ddTHH:MM:SS.sss") : x) => :value)
-        else
-            error("Variable $variable_id is not a date/time type. value_type = $value_type, eltype = $(eltype(coldata.value))")
-        end
-    end
-    for row in eachrow(coldata)
-        DBInterface.execute(stmt, [row.row_id, variable_id, row.value])
-    end
-    return nothing
-end
-"""
-    add_data_column(db::ODBC.Connection, variable_id, value_type, coldata)
-
-Insert data for a column of the source dataset
-"""
-function add_data_column(db::ODBC.Connection, variable_id, value_type, coldata)
-    #println("Add data column variable_id = $variable_id, value_type = $value_type, eltype = $(eltype(coldata.value))")
-    if value_type == TRE_TYPE_INTEGER
-        stmt = prepareinsertstatement(db, "data", ["row_id", "variable_id", "value_integer"])
-    elseif value_type == TRE_TYPE_FLOAT
-        stmt = prepareinsertstatement(db, "data", ["row_id", "variable_id", "value_float"])
-    elseif value_type == TRE_TYPE_STRING
-        stmt = prepareinsertstatement(db, "data", ["row_id", "variable_id", "value_string"])
-        if eltype(coldata.value) <: Union{Missing,Number}
-            transform!(coldata, :value => ByRow(x -> !ismissing(x) ? string(x) : x) => :value)
-        elseif eltype(coldata.value) <: Union{Missing,TimeType}
-            transform!(coldata, :value => ByRow(x -> !ismissing(x) ? Dates.format(x, "yyyy-mm-dd") : x) => :value)
-        else
-            transform!(coldata, :value => ByRow(x -> !ismissing(x) ? String(x) : x) => :value)
-        end
-    elseif value_type == TRE_TYPE_DATE || value_type == TRE_TYPE_TIME || value_type == TRE_TYPE_DATETIME
-        stmt = prepareinsertstatement(db, "data", ["row_id", "variable_id", "value_datetime"])
-    elseif value_type == TRE_TYPE_CATEGORY && eltype(coldata.value) <: Union{Missing,Integer}
-        stmt = prepareinsertstatement(db, "data", ["row_id", "variable_id", "value_integer"])
-    elseif value_type == TRE_TYPE_CATEGORY && eltype(coldata.value) <: Union{Missing,AbstractString}
-        stmt = prepareinsertstatement(db, "data", ["row_id", "variable_id", "value_string"])
-        transform!(coldata, :value => ByRow(x -> !ismissing(x) ? String(x) : x) => :value)
-    else
-        error("Variable $variable_id is not a valid type. value_type = $value_type, eltype = $(eltype(coldata.value))")
-    end
-    for row in eachrow(coldata)
-        DBInterface.execute(stmt, [row.row_id, variable_id, row.value])
-    end
-    return nothing
-end
-
-"""
-    link_deathrows(db::SQLite.DB, ingestion_id, dataset_id, death_identifier)
-
-Insert records into `deathrows` table to link dataset `dataset_id` to `deaths` table. Limited to a specific ingest.
-`death_identifier` is the variable in the dataset that corresponds to the `external_id` of the death.
-"""
-function link_entity_rows(db::SQLite.DB, ingestion_id, dataset_id, entity_identifier)
-
-    sql = """
-    INSERT OR IGNORE INTO death_rows (entity_id, row_id)
-    SELECT
-        d.death_id,
-        data.row_id
-    FROM deaths d
-        JOIN data ON d.external_id = data.value
-        JOIN datarows r ON data.row_id = r.row_id
-    WHERE d.data_ingestion_id = @ingestion_id
-    AND data.variable_id = @death_identifier
-    AND r.dataset_id = @dataset_id
-    """
-    stmt = DBInterface.prepare(db, sql)
-    DBInterface.execute(stmt, (ingestion_id=ingestion_id, death_identifier=death_identifier, dataset_id=dataset_id))
-
-    return nothing
-end
 
 """
 Supporting fuctions
 """
-
 
 """
     get_namedkey(db::DBInterface.Connection, table, key, keycol)
@@ -318,11 +165,11 @@ end
 
 
 """
-    get_variable_id(db::SQLite.DB, domain, name)
+    get_variable_id(db::DBInterface.Connection, domain, name)
 
 Returns the `variable_id` of variable named `name` in domain with id `domain`
 """
-function get_variable_id(db::SQLite.DB, domain, name)
+function get_variable_id(db::DBInterface.Connection, domain, name)
     stmt = prepareselectstatement(db, "variables", ["variable_id"], ["domain_id", "name"])
     result = DBInterface.execute(stmt, [domain, name]) |> DataFrame
     if nrow(result) == 0
@@ -350,11 +197,11 @@ end
 
 
 """
-    get_variable(db::SQLite.DB, variable_id::Integer)
+    get_variable(db::DBInterface.Connection, variable_id::Integer)
 
 Returns the entry of variable with `variable_id`
 """
-function get_variable(db::SQLite.DB, variable_id::Integer)
+function get_variable(db::DBInterface.Connection, variable_id::Integer)
     stmt = prepareselectstatement(db, "variables", ["*"], ["variable_id"])
     result = DBInterface.execute(stmt, [variable_id]) |> DataFrame
     if nrow(result) == 0
@@ -377,12 +224,12 @@ Export dataset
 """
 
 """
-    dataset_to_dataframe(db::SQLite.DB, dataset::Integer, lake::DBInterface.Connection = nothing)::AbstractDataFrame
+    dataset_to_dataframe(db::DBInterface.Connection, dataset::Integer, lake::DBInterface.Connection = nothing)::AbstractDataFrame
 
 Return a dataset with id `dataset` as a DataFrame in the wide format,
 if lake is not specified, the data is read from the `data` table, otherwise from the data lake.
 """
-function dataset_to_dataframe(db::SQLite.DB, dataset::Integer, lake::DBInterface.Connection=nothing)::AbstractDataFrame
+function dataset_to_dataframe(db::DBInterface.Connection, dataset::Integer, lake::DBInterface.Connection=nothing)::AbstractDataFrame
     # Check if dataset is in the data lake
     inlake = !isnothing(lake)
     if inlake
@@ -414,11 +261,11 @@ function dataset_to_dataframe(db::SQLite.DB, dataset::Integer, lake::DBInterface
     return unstack(long, :row_id, :variable, :value)
 end
 """
-    dataset_variables(db::SQLite.DB, dataset)::AbstractDataFrame
+    dataset_variables(db::DBInterface.Connection, dataset)::AbstractDataFrame
 
 Return the list of variables in a dataset
 """
-function dataset_variables(db::SQLite.DB, dataset)::AbstractDataFrame
+function dataset_variables(db::DBInterface.Connection, dataset)::AbstractDataFrame
     sql = """
     SELECT
         v.variable_id,
@@ -466,11 +313,11 @@ end
 
 
 """
-    dataset_column(db::SQLite.DB, dataset_id::Integer, variable_id::Integer, variable_name::String)::AbstractDataFrame
+    dataset_column(db::DBInterface.Connection, dataset_id::Integer, variable_id::Integer, variable_name::String)::AbstractDataFrame
 
 Return one column of data in a dataset (representing a variable)
 """
-function dataset_column(db::SQLite.DB, dataset_id::Integer, variable_id::Integer, variable_name::String)::AbstractDataFrame
+function dataset_column(db::DBInterface.Connection, dataset_id::Integer, variable_id::Integer, variable_name::String)::AbstractDataFrame
     sql = """
     SELECT
         d.row_id,
@@ -485,11 +332,11 @@ function dataset_column(db::SQLite.DB, dataset_id::Integer, variable_id::Integer
 end
 
 """
-    get_datasetname(db::SQLite.DB, dataset)
+    get_datasetname(db::DBInterface.Connection, dataset)
 
 Return dataset name, given the `dataset_id`
 """
-function get_datasetname(db::SQLite.DB, dataset)
+function get_datasetname(db::DBInterface.Connection, dataset)
     sql = """
     SELECT
       name
