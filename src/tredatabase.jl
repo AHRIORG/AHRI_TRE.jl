@@ -19,7 +19,7 @@ function createdatabase(server, user, password, database; replace=false)
         createstudies(conn)
         createtransformations(conn)
         createvariables(conn)
-        createdatasets(conn)
+        createassets(conn)
         #createentities(conn)
         #createmapping(conn)
         return nothing
@@ -323,18 +323,12 @@ function createvariables(conn::MySQL.Connection)
     sql = raw"""
     CREATE TABLE IF NOT EXISTS `value_types` (
         `value_type_id` INTEGER NOT NULL PRIMARY KEY,
-        `value_type` VARCHAR(80) NOT NULL,
+        `value_type` VARCHAR(80) NOT NULL UNIQUE,
         `description` TEXT
     );
     """
     DBInterface.execute(conn, sql)
     @info "Created value_types table"
-    sql = raw"""
-    CREATE UNIQUE INDEX IF NOT EXISTS `i_value_type`
-    ON `value_types` (`value_type`);
-    """
-    DBInterface.execute(conn, sql)
-    @info "Created unique index on value_types"
     sql = raw"""
     CREATE TABLE IF NOT EXISTS `vocabularies` (
         `vocabulary_id` INTEGER NOT NULL PRIMARY KEY,
@@ -359,17 +353,13 @@ function createvariables(conn::MySQL.Connection)
     sql = raw"""
     CREATE TABLE IF NOT EXISTS `domains` (
     `domain_id` INTEGER NOT NULL PRIMARY KEY,
-    `name` VARCHAR(80) NOT NULL,
-    `description` TEXT NOT NULL
+    `name` VARCHAR(80) NOT NULL UNIQUE,
+    `description` TEXT NULL,
+    `uri` TEXT NULL
     );
     """
     DBInterface.execute(conn, sql)
     @info "Created domains table"
-    sql = raw"""
-    CREATE UNIQUE INDEX IF NOT EXISTS `i_domain_name`
-    ON `domains` (`name`);
-    """
-    DBInterface.execute(conn, sql)
     sql = raw"""
     CREATE TABLE IF NOT EXISTS `variables` (
         `variable_id` INTEGER NOT NULL PRIMARY KEY,
@@ -437,53 +427,60 @@ function updatevariable_vocabulary(conn::MySQL.Connection, name, domain_id, voca
     DBInterface.execute(conn, sql)
 end
 """
-    createdatasets(conn::MySQL.Connection)
+    createassets(conn::MySQL.Connection)
 
-Create tables to record datasets, rows, data and links to the transformations that use/created the datasets
+Create tables to record data assets, rows, data and links to the transformations that use/created the assets
 """
-function createdatasets(conn::MySQL.Connection)
+function createassets(conn::MySQL.Connection)
     sql = raw"""
-    CREATE TABLE IF NOT EXISTS `unit_of_analysis_types` (
-    `unit_of_analysis_id` INTEGER NOT NULL PRIMARY KEY,
-    `name` VARCHAR(80) NOT NULL
+    CREATE TABLE IF NOT EXISTS asset_types (
+        asset_type_id INTEGER NOT NULL PRIMARY KEY,
+        name VARCHAR(128) NOT NULL
     );
     """
     DBInterface.execute(conn, sql)
-    @info "Created unit_of_analysis_types table"
-    units = initunitanalysis()
-    savedataframe(conn, units, "unit_of_analysis_types")
-
+    @info "Created asset_types table"
+    savedataframe(conn, initassettypes(), "asset_types") # Initialize asset types
+    sql = raw"""
+    CREATE TABLE IF NOT EXISTS assets (
+        asset_id INTEGER NOT NULL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        date_created DATE NOT NULL,
+        description TEXT,
+        asset_type_id INTEGER,
+        `doi` TEXT,
+        CONSTRAINT fk_assets_asset_type_id FOREIGN KEY (asset_type_id) REFERENCES asset_types (asset_type_id) ON DELETE CASCADE ON UPDATE RESTRICT
+    );
+    """
+    DBInterface.execute(conn, sql)
+    @info "Created assets table"
     sql = raw"""
     CREATE TABLE IF NOT EXISTS `datasets` (
         `dataset_id` INTEGER NOT NULL PRIMARY KEY,
-        `name` VARCHAR(128) NOT NULL,
-        `date_created` DATE NOT NULL,
-        `description` TEXT,
-        `unit_of_analysis_id` INTEGER,
-        `doi` TEXT,
-        `in_lake` TINYINT NOT NULL DEFAULT 0, 
-        CONSTRAINT `fk_datasets_unit_of_analysis_id` FOREIGN KEY (`unit_of_analysis_id`) REFERENCES `unit_of_analysis_types` (`unit_of_analysis_id`) ON DELETE CASCADE ON UPDATE RESTRICT
+        `asset_id` INTEGER UNIQUE NOT NULL,
+        CONSTRAINT `fk_datasets_asset_id` FOREIGN KEY (`asset_id`) REFERENCES `assets` (`asset_id`) ON DELETE CASCADE ON UPDATE RESTRICT
     );
     """
     DBInterface.execute(conn, sql)
     @info "Created datasets table"
-
     sql = raw"""
-    CREATE TABLE IF NOT EXISTS `datarows` (
-    `row_id` INTEGER NOT NULL PRIMARY KEY,
-    `dataset_id` INTEGER NOT NULL,
-    CONSTRAINT `fk_datarows_dataset_id` FOREIGN KEY (`dataset_id`) REFERENCES `datasets` (`dataset_id`) ON DELETE CASCADE ON UPDATE RESTRICT
+    CREATE TABLE IF NOT EXISTS `datafiles` (
+        `datafile_id` INTEGER NOT NULL PRIMARY KEY,
+        `asset_id` INTEGER UNIQUE NOT NULL,
+        `compressed` BOOLEAN DEFAULT FALSE,
+        `encrypted` BOOLEAN DEFAULT FALSE,
+        `file_name` VARCHAR(255) NOT NULL,
+        `file_path` TEXT NOT NULL,
+        CONSTRAINT `fk_datafiles_asset_id` FOREIGN KEY (`asset_id`) REFERENCES `assets` (`asset_id`) ON DELETE CASCADE ON UPDATE RESTRICT
     );
     """
-    DBInterface.execute(conn, sql)
-    @info "Created datarows table"
     sql = raw"""
     CREATE TABLE IF NOT EXISTS `transformation_inputs` (
     `transformation_id` INTEGER NOT NULL,
-    `dataset_id` INTEGER NOT NULL,
-    PRIMARY KEY (`transformation_id`, `dataset_id`),
+    `asset_id` INTEGER NOT NULL,
+    PRIMARY KEY (`transformation_id`, `asset_id`),
     CONSTRAINT `fk_transformation_inputs_transformation_id` FOREIGN KEY (`transformation_id`) REFERENCES `transformations` (`transformation_id`) ON DELETE CASCADE ON UPDATE RESTRICT,
-    CONSTRAINT `fk_transformation_inputs_dataset_id` FOREIGN KEY (`dataset_id`) REFERENCES `datasets` (`dataset_id`) ON DELETE CASCADE ON UPDATE RESTRICT
+    CONSTRAINT `fk_transformation_inputs_asset_id` FOREIGN KEY (`asset_id`) REFERENCES `assets` (`asset_id`) ON DELETE CASCADE ON UPDATE RESTRICT
     );
     """
     DBInterface.execute(conn, sql)
@@ -491,10 +488,10 @@ function createdatasets(conn::MySQL.Connection)
     sql = raw"""
     CREATE TABLE IF NOT EXISTS `transformation_outputs` (
     `transformation_id` INTEGER NOT NULL,
-    `dataset_id` INTEGER NOT NULL,
-    PRIMARY KEY (`transformation_id`, `dataset_id`),
+    `asset_id` INTEGER NOT NULL,
+    PRIMARY KEY (`transformation_id`, `asset_id`),
     CONSTRAINT `fk_transformation_outputs_transformation_id` FOREIGN KEY (`transformation_id`) REFERENCES `transformations` (`transformation_id`) ON DELETE CASCADE ON UPDATE RESTRICT,
-    CONSTRAINT `fk_transformation_outputs_dataset_id` FOREIGN KEY (`dataset_id`) REFERENCES `datasets` (`dataset_id`) ON DELETE CASCADE ON UPDATE RESTRICT
+    CONSTRAINT `fk_transformation_outputs_asset_id` FOREIGN KEY (`asset_id`) REFERENCES `assets` (`asset_id`) ON DELETE CASCADE ON UPDATE RESTRICT
     );
     """
     DBInterface.execute(conn, sql)
@@ -511,65 +508,99 @@ function createdatasets(conn::MySQL.Connection)
     DBInterface.execute(conn, sql)
     @info "Created dataset_variables table"
     sql = raw"""
-    CREATE TABLE IF NOT EXISTS `ingest_datasets` (
-        `ingest_dataset_id` INTEGER NOT NULL PRIMARY KEY,
+    CREATE TABLE IF NOT EXISTS `ingest_assets` (
+        `ingest_asset_id` INTEGER NOT NULL PRIMARY KEY,
         `data_ingestion_id` INTEGER NOT NULL,
         `transformation_id` INTEGER NOT NULL,
-        `dataset_id` INTEGER NOT NULL,
+        `asset_id` INTEGER NOT NULL,
         CONSTRAINT `fk_ingest_datasets_data_ingestion_id` FOREIGN KEY (`data_ingestion_id`) REFERENCES `data_ingestions` (`data_ingestion_id`) ON DELETE CASCADE ON UPDATE RESTRICT,
         CONSTRAINT `fk_ingest_datasets_transformation_id` FOREIGN KEY (`transformation_id`) REFERENCES `transformations` (`transformation_id`) ON DELETE CASCADE ON UPDATE RESTRICT,
-        CONSTRAINT `fk_ingest_datasets_dataset_id` FOREIGN KEY (`dataset_id`) REFERENCES `datasets` (`dataset_id`) ON DELETE NO ACTION ON UPDATE RESTRICT
+        CONSTRAINT `fk_ingest_datasets_asset_id` FOREIGN KEY (`asset_id`) REFERENCES `assets` (`asset_id`) ON DELETE NO ACTION ON UPDATE RESTRICT
     );
     """
     DBInterface.execute(conn, sql)
-    @info "Created ingest_datasets table"
+    @info "Created ingest_assets table"
     return nothing
 end
 
 """
-    initunitanalysis()
+    initassettypes()
 
-Default unit of analysis
+Create the default asset types for datasets and documents.
 """
-initunitanalysis() = DataFrame([(unit_of_analysis_id=TRE_UNIT_OF_ANALYSIS_INDIVIDUAL, name="Individual"),
-    (unit_of_analysis_id=TRE_UNIT_OF_ANALYSIS_AGGREGATION, name="Aggregation")])
+initassettypes() = DataFrame([(asset_type_id=TRE_DATASET, name="Dataset"),
+    (asset_type_id=TRE_DOCUMENT, name="Document")])
 """
     createentities(conn)
 
-Create tables to store deaths, and their association with data rows and data ingests
+Create tables to store entities
 """
 function createentities(conn::MySQL.Connection)
     #TODO: Add a table to store the entity types, e.g. individual, household, death, birth, etc.
     sql = raw"""
     CREATE TABLE IF NOT EXISTS `entities` (
     `entity_id` INTEGER NOT NULL PRIMARY KEY,
-    `study_id` INTEGER NOT NULL,
-    `external_id` TEXT NOT NULL,
-    `data_ingestion_id` INTEGER NOT NULL,
-    CONSTRAINT `fk_deaths_study_id` FOREIGN KEY (`study_id`) REFERENCES `studies` (`study_id`) ON DELETE NO ACTION ON UPDATE NO ACTION,
-    CONSTRAINT `fk_deaths_data_ingestion_id` FOREIGN KEY (`data_ingestion_id`) REFERENCES `data_ingestions` (`data_ingestion_id`) ON DELETE NO ACTION ON UPDATE NO ACTION,
-    CONSTRAINT `unique_external_id` UNIQUE (`study_id` ASC, `external_id` ASC)
+    `domain_id` INTEGER NOT NULL,
+    `name` VARCHAR(128) NOT NULL,
+    `ontology_namespace` TEXT NULL,
+    `ontology_class` TEXT NULL,
+    CONSTRAINT `fk_entities_domain_id` FOREIGN KEY (`domain_id`) REFERENCES `domains` (`domain_id`) ON DELETE NO ACTION ON UPDATE NO ACTION
     );
     """
     DBInterface.execute(conn, sql)
     sql = raw"""
-    CREATE INDEX IF NOT EXISTS `i_entity_study_id`
-    ON `entities` (
-    `study_id` ASC
-    );
-    """
+    CREATE TABLE IF NOT EXISTS `entityrelations` (
+    `entityrelation_id` INTEGER NOT NULL PRIMARY KEY,
+    `entity_id_1` INTEGER NOT NULL,
+    `entity_id_2` INTEGER NOT NULL,
+    `name` VARCHAR(128) NOT NULL,
+    `description` TEXT NULL,
+    `ontology_namespace` TEXT NULL,
+    `ontology_class` TEXT NULL,
+    CONSTRAINT `fk_entityrelationships_entity_id_1` FOREIGN KEY (`entity_id_1`) REFERENCES `entities` (`entity_id`) ON DELETE CASCADE ON UPDATE NO ACTION,
+    CONSTRAINT `fk_entityrelationships_entity_id_2` FOREIGN KEY (`entity_id_2`) REFERENCES `entities` (`entity_id`) ON DELETE CASCADE ON UPDATE NO ACTION
+    );"""
     DBInterface.execute(conn, sql)
+    @info "Created entityrelations table"
     sql = raw"""
-    CREATE TABLE IF NOT EXISTS `entity_rows` (
+    CREATE TABLE IF NOT EXISTS `entity_instances` (
+    `instance_id` INTEGER NOT NULL PRIMARY KEY,
     `entity_id` INTEGER NOT NULL,
-    `row_id` INTEGER NOT NULL,
-    PRIMARY KEY (`entity_id`, `row_id`),
-    CONSTRAINT `fk_entity_rows_entity_id` FOREIGN KEY (`entity_id`) REFERENCES `entities` (`entity_id`) ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT `fk_entity_rows_row_id` FOREIGN KEY (`row_id`) REFERENCES `datarows` (`row_id`) ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT `unique_rows` UNIQUE (`entity_id` ASC, `row_id` ASC)
+    `study_id` INTEGER NOT NULL,
+    `external_id` VARCHAR(128) NULL,
+    CONSTRAINT `fk_entity_instances_entity_id` FOREIGN KEY (`entity_id`) REFERENCES `entities` (`entity_id`) ON DELETE CASCADE ON UPDATE NO ACTION,
+    CONSTRAINT `fk_entity_instances_study_id` FOREIGN KEY (`study_id`) REFERENCES `studies` (`study_id`) ON DELETE CASCADE ON UPDATE NO ACTION
     );
     """
     DBInterface.execute(conn, sql)
+    @info "Created entity_instances table"
+    sql = raw"""
+    CREATE TABLE IF NOT EXISTS `relation_instances` (
+    `relation_instance_id` INTEGER NOT NULL PRIMARY KEY,
+    `entityrelation_id` INTEGER NOT NULL,
+    `entity_instance_id_1` INTEGER NOT NULL,
+    `entity_instance_id_2` INTEGER NOT NULL,
+    `valid_from` DATE NOT NULL,
+    `valid_to` DATE NOT NULL,
+    `external_id` VARCHAR(128) NULL,
+    CONSTRAINT `fk_relationship_instances_entityrelationship_id` FOREIGN KEY (`entityrelation_id`) REFERENCES `entityrelationships` (`entityrelation_id`) ON DELETE CASCADE ON UPDATE NO ACTION,
+    CONSTRAINT `fk_relationship_instances_entity_instance_id_1` FOREIGN KEY (`entity_instance_id_1`) REFERENCES `entity_instances` (`instance_id`) ON DELETE CASCADE ON UPDATE NO ACTION,
+    CONSTRAINT `fk_relationship_instances_entity_instance_id_2` FOREIGN KEY (`entity_instance_id_2`) REFERENCES `entity_instances` (`instance_id`) ON DELETE CASCADE ON UPDATE NO ACTION
+    );
+    """
+    DBInterface.execute(conn, sql)
+    @info "Created relation_instances table"
+    sql = raw"""
+    CREATE TABLE IF NOT EXISTS `data_asset_entities` (
+     `asset_id` INTEGER NOT NULL,
+    `entity_instance_id` INTEGER NOT NULL,
+    PRIMARY KEY (`asset_id`, `entity_instance_id`),
+    CONSTRAINT `fk_data_asset_entities_asset_id` FOREIGN KEY (`asset_id`) REFERENCES `assets` (`asset_id`) ON DELETE CASCADE ON UPDATE RESTRICT,
+    CONSTRAINT `fk_data_asset_entities_entity_instance_id` FOREIGN KEY (`entity_instance_id`) REFERENCES `entity_instances` (`instance_id`) ON DELETE CASCADE ON UPDATE RESTRICT
+    );
+    """
+    DBInterface.execute(conn, sql)
+    @info "Created data_asset_entities table"
     return nothing
 end
 
