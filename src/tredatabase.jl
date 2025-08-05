@@ -180,12 +180,12 @@ function createstudies(conn::MySQL.Connection)
     `study_id` INTEGER AUTO_INCREMENT PRIMARY KEY,
     `name` varchar(128) NOT NULL,
     `description` TEXT,
-    `external_id` VARCHAR(128) NULL,
-    `study_type_id` INTEGER,
+    `external_id` VARCHAR(128) NULL COMMENT 'External identifier for the study, e.g. from a registry or sponsor',
+    `study_type_id` INTEGER COMMENT 'Type of study, e.g. HDSS, Cohort, Survey, etc.',
     `date_created` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    `created_by` VARCHAR(255) DEFAULT (CURRENT_USER()),
+    `created_by` VARCHAR(255) DEFAULT (CURRENT_USER()) COMMENT 'User who created the study record',
     CONSTRAINT `fk_sources_study_type_id` FOREIGN KEY (`study_type_id`) REFERENCES `study_types` (`study_type_id`) ON DELETE CASCADE ON UPDATE RESTRICT
-    );
+    ) COMMENT = 'Studies table to record information about studies contributing data to the TRE';
     """
     DBInterface.execute(conn, sql)
     @info "Created studies table"
@@ -257,12 +257,12 @@ function createtransformations(conn::MySQL.Connection)
     `transformation_id` INTEGER AUTO_INCREMENT PRIMARY KEY,
     `transformation_type` ENUM('ingest','transform') NOT NULL,
     `description` TEXT NOT NULL,
-    `repository_url` TEXT NULL, -- URL to the repository where the transformation script is stored
-    `commit_hash` CHAR(40) NULL, -- git commit hash
-    `file_path` TEXT NOT NULL, -- path to the transformation script or notebook
+    `repository_url` TEXT NULL COMMENT 'URL to the repository where the transformation script is stored', 
+    `commit_hash` CHAR(40) NULL COMMENT 'git commit hash',
+    `file_path` TEXT NOT NULL COMMENT 'Path to the transformation script or notebook in the repository',
     `date_created` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     `created_by` VARCHAR(255) DEFAULT (CURRENT_USER())
-    );
+    ) COMMENT = 'Transformations table to record data transformations and ingests';
     """
     DBInterface.execute(conn, sql)
     @info "Created transformations table"
