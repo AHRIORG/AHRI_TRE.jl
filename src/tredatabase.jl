@@ -228,24 +228,24 @@ initstudytypes() = """
 
     -- Secondary / Desk Review
     (17, 'SECONDARY_ANALYSIS', 'Secondary Data Analysis','http://purl.bioontology.org/ontology/MESH','D000094422'),
-    (18, 'DESK_REVIEW', 'Desk or Literature Review',http://ontologies.dbmi.pitt.edu/edda/StudyDesigns.owl','literature_review'),
+    (18, 'DESK_REVIEW', 'Desk or Literature Review','http://ontologies.dbmi.pitt.edu/edda/StudyDesigns.owl','literature_review'),
 
     -- Social / Behavioural
-    (19, 'TIME_USE', 'Time Use Study'),
-    (20, 'DIARY', 'Diary Study'),
+    (19, 'TIME_MOTION', 'Time and Motion Study','http://ontologies.dbmi.pitt.edu/edda/StudyDesigns.owl','time_and_motion_study'),
+    (20, 'DIARY', 'Diary Study','http://purl.bioontology.org/ontology/CSP','4009-0001'),
     (21, 'LONGITUDINAL_OBSERVATION', 'Longitudinal Observational Study','http://ontologies.dbmi.pitt.edu/edda/StudyDesigns.owl','longitudinal_study'),
 
     -- Simulation / Modelling
-    (22, 'SIMULATION', 'Simulation Study'),
-    (23, 'AGENT_BASED_MODEL', 'Agent-based Modelling'),
-    (24, 'STATISTICAL_MODEL', 'Statistical Modelling Study'),
-    (25, 'SYSTEM_DYNAMICS', 'System Dynamics Modelling'),
+    (22, 'SIMULATION', 'Simulation Study','http://edamontology.org','data_3869'),
+    (23, 'AGENT_BASED_MODEL', 'Agent-based Modelling','https://i2insights.org/index/integration-and-implementation-sciences-vocabulary','agent-based-modelling'),
+    (24, 'STATISTICAL_MODEL', 'Statistical Modelling','http://edamontology.org','operation_3664'),
+    (25, 'SYSTEM_DYNAMICS', 'Biological system modelling','http://edamontology.org','topic_3075'),
 
     -- Genomics / Biomedical
     (26, 'GENOMICS', 'Genomics Study','http://ontologies.dbmi.pitt.edu/edda/StudyDesigns.owl','genetic_study'),
     (27, 'MULTIOMICS', 'Multi-omics Study (e.g., proteomics, metabolomics)','http://purl.bioontology.org/ontology/MESH','D000095028'),
-    (28, 'BIOBANK', 'Biobank-based Study'),
-    (29, 'PHARMACOGENOMICS', 'Pharmacogenomics Study');
+    (28, 'BIOBANK', 'Biobank-based Study','http://purl.obolibrary.org/obo','OBIB_0000616'),
+    (29, 'PHARMACOGENOMICS', 'Pharmacogenomics Study','http://edamontology.org','topic_0208');
 """
 """
     createtransformations(conn)
@@ -256,7 +256,7 @@ function createtransformations(conn::MySQL.Connection)
     sql = raw"""
     CREATE TABLE IF NOT EXISTS `transformations` (
     `transformation_id` INTEGER AUTO_INCREMENT PRIMARY KEY,
-    `transformation_type` ENUM('ingest','transform') NOT NULL,
+    `transformation_type` ENUM('ingest','transform') NOT NULL COMMENT 'Type of transformation, either ingesting data or transforming existing data',
     `description` TEXT NOT NULL,
     `repository_url` TEXT NULL COMMENT 'URL to the repository where the transformation script is stored', 
     `commit_hash` CHAR(40) NULL COMMENT 'git commit hash',
@@ -310,7 +310,7 @@ function createvariables(conn::MySQL.Connection)
     `domain_id` INTEGER AUTO_INCREMENT PRIMARY KEY,
     `name` VARCHAR(80) NOT NULL UNIQUE COMMENT 'If it is a public ontology, this is the prefix of the ontology, otherwise it is the name of the namespace',
     `description` TEXT NULL,
-    `uri` TEXT NULL COMMENT 'URI to the domain for public ontologies or namespaces',
+    `uri` TEXT NULL COMMENT 'URI to the domain for public ontologies or namespaces'
     ) COMMENT = 'Domains table to record different namespaces for variable, entity and entityrelations identifiers';
     """
     DBInterface.execute(conn, sql)
@@ -535,39 +535,39 @@ function createentities(conn::MySQL.Connection)
     sql = raw"""
     CREATE TABLE IF NOT EXISTS `entity_instances` (
     `instance_id` BIGINT AUTO_INCREMENT PRIMARY KEY,
-    `entity_id` INTEGER NOT NULL,
-    `study_id` INTEGER NOT NULL,
-    `external_id` VARCHAR(128) NULL,
+    `entity_id` INTEGER NOT NULL COMMENT 'ID of the entity this instance belongs to',
+    `study_id` INTEGER NOT NULL COMMENT 'ID of the study this entity instance is associated with',
+    `external_id` VARCHAR(128) NULL COMMENT 'External identifier for the entity instance, e.g. from a study database, registry or sponsor',
     CONSTRAINT `fk_entity_instances_entity_id` FOREIGN KEY (`entity_id`) REFERENCES `entities` (`entity_id`) ON DELETE CASCADE ON UPDATE NO ACTION,
     CONSTRAINT `fk_entity_instances_study_id` FOREIGN KEY (`study_id`) REFERENCES `studies` (`study_id`) ON DELETE CASCADE ON UPDATE NO ACTION
-    );
+    ) COMMENT = 'Entity instances table to record specific instances of entities in a study, allowing for tracking of entities across studies';
     """
     DBInterface.execute(conn, sql)
     @info "Created entity_instances table"
     sql = raw"""
     CREATE TABLE IF NOT EXISTS `relation_instances` (
     `relation_instance_id` BIGINT AUTO_INCREMENT PRIMARY KEY,
-    `entityrelation_id` INTEGER NOT NULL,
-    `entity_instance_id_1` BIGINT NOT NULL,
-    `entity_instance_id_2` BIGINT NOT NULL,
-    `valid_from` DATE NOT NULL,
-    `valid_to` DATE NOT NULL,
-    `external_id` VARCHAR(128) NULL,
+    `entityrelation_id` INTEGER NOT NULL COMMENT 'ID of the entity relationship this instance belongs to',
+    `entity_instance_id_1` BIGINT NOT NULL COMMENT 'ID of the first entity instance in the relationship',
+    `entity_instance_id_2` BIGINT NOT NULL COMMENT 'ID of the second entity instance in the relationship',
+    `valid_from` DATE NOT NULL COMMENT 'Start date of the relationship instance, e.g. when the relationship episode started',
+    `valid_to` DATE NOT NULL COMMENT 'End date of the relationship instance, e.g. when the relationship episode ended',
+    `external_id` VARCHAR(128) NULL COMMENT 'External identifier for the relationship instance, e.g. from a study database, registry or sponsor',
     CONSTRAINT `fk_relationship_instances_entityrelationship_id` FOREIGN KEY (`entityrelation_id`) REFERENCES `entityrelations` (`entityrelation_id`) ON DELETE CASCADE ON UPDATE NO ACTION,
     CONSTRAINT `fk_relationship_instances_entity_instance_id_1` FOREIGN KEY (`entity_instance_id_1`) REFERENCES `entity_instances` (`instance_id`) ON DELETE CASCADE ON UPDATE NO ACTION,
     CONSTRAINT `fk_relationship_instances_entity_instance_id_2` FOREIGN KEY (`entity_instance_id_2`) REFERENCES `entity_instances` (`instance_id`) ON DELETE CASCADE ON UPDATE NO ACTION
-    );
+    ) COMMENT = 'Relation instances table to record specific instances of entity relationships, allowing for tracking of relationships between entity instances in a study';
     """
     DBInterface.execute(conn, sql)
     @info "Created relation_instances table"
     sql = raw"""
     CREATE TABLE IF NOT EXISTS `data_asset_entities` (
-     `asset_id` INT NOT NULL,
-     `entity_instance_id` BIGINT NOT NULL,
+     `asset_id` INT NOT NULL COMMENT 'ID of the asset this entity instance is associated with',
+     `entity_instance_id` BIGINT NOT NULL COMMENT 'ID of the entity instance this asset is associated with',
     PRIMARY KEY (`asset_id`, `entity_instance_id`),
     CONSTRAINT `fk_data_asset_entities_asset_id` FOREIGN KEY (`asset_id`) REFERENCES `assets` (`asset_id`) ON DELETE CASCADE ON UPDATE RESTRICT,
     CONSTRAINT `fk_data_asset_entities_entity_instance_id` FOREIGN KEY (`entity_instance_id`) REFERENCES `entity_instances` (`instance_id`) ON DELETE CASCADE ON UPDATE RESTRICT
-    );
+    ) COMMENT = 'Data asset entities table to link assets to entity instances, allowing for tracking which entities are associated with specific assets';
     """
     DBInterface.execute(conn, sql)
     @info "Created data_asset_entities table"
@@ -595,15 +595,15 @@ function createmapping(conn::MySQL.Connection)
     sql = raw"""
     CREATE TABLE IF NOT EXISTS `variable_mapping` (
     `mapping_id` INTEGER AUTO_INCREMENT PRIMARY KEY,
-    `from_variable_id` INTEGER NOT NULL,
-    `to_variable_id` INTEGER NOT NULL,
-    `operator` TEXT NOT NULL,
-    `operants` TEXT NOT NULL,
-    `prerequisite_id` INTEGER,
+    `from_variable_id` INTEGER NOT NULL COMMENT 'ID of the variable from the source instrument',
+    `to_variable_id` INTEGER NOT NULL COMMENT 'ID of the variable in the destination instrument',
+    `operator` ENUM('eq','gt','ge','lt','le','ne','contains','between','map') NOT NULL COMMENT 'Operator to be used to create the variable value',
+    `operants` TEXT NOT NULL COMMENT 'Operants to be used with the operator, e.g. the value to compare the variable to, or the mapping to use',
+    `prerequisite_id` INTEGER COMMENT 'ID of the prerequisite variable that must be satisfied for the mapping to be applied',
     CONSTRAINT `fk_variable_mapping_from_variable_id` FOREIGN KEY (`from_variable_id`) REFERENCES `variables` (`variable_id`) ON DELETE CASCADE ON UPDATE NO ACTION,
     CONSTRAINT `fk_variable_mapping_to_variable_id` FOREIGN KEY (`to_variable_id`) REFERENCES `variables` (`variable_id`) ON DELETE CASCADE ON UPDATE NO ACTION,
     CONSTRAINT `fk_variable_mapping_prerequisite_id` FOREIGN KEY (`prerequisite_id`) REFERENCES `variables` (`variable_id`) ON DELETE CASCADE ON UPDATE NO ACTION
-    );
+    ) COMMENT = 'Variable mapping table to map variables from one instrument to another, based on the PyCrossVA approach';
     """
     DBInterface.execute(conn, sql)
     @info "Created variable_mapping table"
