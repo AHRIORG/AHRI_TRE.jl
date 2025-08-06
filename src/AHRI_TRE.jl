@@ -353,7 +353,48 @@ function get_datasetname(db::DBInterface.Connection, dataset)
         return name # Return name without extension
     end
 end
+"""
+    path_to_file_uri(path::AbstractString) -> String
 
+Converts a local file path to a properly encoded file:// URI.
+"""
+function path_to_file_uri(path::AbstractString)
+    # Normalize and get absolute path
+    abs_path = string(normpath(abspath(path)))
+
+    # Handle Windows paths (convert backslashes and add slash before drive letter)
+    if Sys.iswindows()
+        abs_path = replace(abs_path, "\\" => "/")
+        if occursin(r"^[A-Za-z]:", abs_path)
+            abs_path = "/" * abs_path  # e.g. /C:/Users/...
+        end
+    end
+
+    # Percent-encode using URI constructor
+    uri = URI("file://" * abs_path)
+    return string(uri)
+end
+
+"""
+    blake3_digest_hex(path::AbstractString) -> String
+
+Computes the BLAKE3 digest of a file and returns it as a hexadecimal string.
+"""
+function blake3_digest_hex(path::AbstractString)
+    open(path, "r") do io
+        digest_bytes = blake3sum(io)
+        return lowercase(bytes2hex(digest_bytes))
+    end
+end
+"""
+    verify_blake3_digest(path::AbstractString, expected_hex::AbstractString) -> Bool
+
+Checks whether the BLAKE3 digest of the file matches the expected hex digest.
+"""
+function verify_blake3_digest(path::AbstractString, expected_hex::AbstractString)
+    digest = blake3_digest_hex(path)
+    return lowercase(digest) == lowercase(expected_hex)
+end
 include("constants.jl")
 include("tredatabase.jl")
 
