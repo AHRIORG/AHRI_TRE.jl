@@ -27,14 +27,22 @@ function createdatabase(server, user, password, database; replace=false)
         DBInterface.close!(conn)
     end
 end
+function opendatastore(store::DataStore)::DataStore
+    conn, lake = opendatastore(store.server, store.user, store.password, store.dbname, store.lake_data, store.lake_db, 
+        store.lake_user, store.lake_password)
+    store.store = conn
+    store.lake = lake
+    return store
+end
 """
     opendatastore(server::AbstractString, user::AbstractString, password::AbstractString, database::AbstractString, lake_data::Union{String,Nothing}=nothing, lake_db::Union{String,Nothing}=nothing)
 Open a database connection to a MySQL server with optional DuckDB data lake support.
 This function connects to a MySQL server using the provided credentials and database name.
 """
 function opendatastore(server::AbstractString, user::AbstractString, password::AbstractString, database::AbstractString,
-    lake_data::Union{String,Nothing}=nothing, lake_db::Union{String,Nothing}=nothing)
-    conn = DBInterface.connect(MySQL.Connection, server, user, password, database) #, unix_socket="/var/run/mysqld/mysqld.sock"
+    lake_data::Union{String,Nothing}=nothing, lake_db::Union{String,Nothing}=nothing, 
+    lake_user::Union{String,Nothing}=nothing, lake_password::Union{String,Nothing}=nothing)
+    conn = DBInterface.connect(MySQL.Connection, server, user, password; db = database) #, unix_socket="/var/run/mysqld/mysqld.sock"
     @info "Connected to database $(database) on server $(server)"
     # Open ducklake database if lake_data and lake_db are provided
     # ATTACH 'ducklake:mysql:host=localhost port=3306 user=ducklake_user password=Nzy-f6y@brNF_6AFaC2MrZAU database=ducklake_catalog' AS my_ducklake (DATA_PATH '/data/datalake', METADATA_SCHEMA 'ducklake_catalog');
@@ -45,13 +53,35 @@ function opendatastore(server::AbstractString, user::AbstractString, password::A
         if !isdir(lake_data)
             mkpath(lake_data)
         end
-        ddb = DuckDB.conn()
+        ddb = DuckDB.DB()
         lake = DBInterface.connect(ddb)
+        df = DuckDB.query(ddb, "SELECT version() as duckdb_version;") |> DataFrame
+        @info df
+        DBInterface.execute(lake, "LOAD 'ducklake';")
+        DBInterface.execute(lake, "LOAD 'mysql';")
+        df = DuckDB.query(ddb, "UPDATE EXTENSIONS;") |> DataFrame
+        @info df
+
         # Attach the data lake database
-        DBInterface.execute(conn, "ATTACH 'ducklake:mysql:host=$(server) port=3306 user=$(user) password=$(password) database=$(lake_db)' AS rda_lake (DATA_PATH '$lake_data', METADATA_SCHEMA 'ducklake_catalog');")
-        DBInterface.execute(conn, "USE rda_lake;")
+        DBInterface.execute(lake, "ATTACH 'ducklake:mysql:host=$(server) port=3306 user=$(lake_user) password=$(lake_password) database=$(lake_db)' AS rda_lake 
+        (DATA_PATH '$lake_data', METADATA_SCHEMA 'ducklake_catalog');")
+        DBInterface.execute(lake, "USE rda_lake;")
+        @info "Attached DuckDB data lake at $(lake_data) with metadata database $lake_db"
     end
     return conn, lake
+end
+"""
+    closedatastore(store::DataStore)
+
+Close the connections in a DataStore object
+"""
+function closedatastore(store::DataStore)
+    DBInterface.close!(store.store) 
+    if !isnothing(store.lake)
+        DBInterface.close!(store.lake)
+    end
+    @info "Closed datastore connections"
+    return nothing
 end
 """
     get_table(conn::MySQL.Connection, table::String)::AbstractDataFrame
@@ -89,7 +119,7 @@ end
 Prepare an insert statement for MySQL into table for columns
 """
 function prepareinsertstatement(conn::MySQL.Connection, table, columns)
-    paramnames = map(makeparam, columns) # add @ to column name
+    paramnames = map(makeparam, columns) # '?' for MySQL
     sql = "INSERT INTO $table ($(join(columns, ", "))) VALUES ($(join(paramnames, ", ")));"
     return DBInterface.prepare(conn, sql)
 end
@@ -99,14 +129,14 @@ end
 
 Update value of column given condition_value in condition_column
 """
-function updatevalue(conn::MySQL.Connection, table, condition_column, column, condition_value, value)
+function updatevalues(conn::MySQL.Connection, table, condition_column, condition_value, columns, values)
     sql = """
         UPDATE $table 
-        SET $column = ?
+        SET $(join([col * " = ?" for col in columns], ", "))
         WHERE $condition_column = ?
         """
     stmt = DBInterface.prepare(conn, sql)
-    DBInterface.execute(stmt, (value, condition_value))
+    DBInterface.execute(stmt, vcat(values, condition_value))
     return nothing
 end
 """
@@ -180,7 +210,7 @@ function createstudies(conn::MySQL.Connection)
     sql = raw"""
     CREATE TABLE IF NOT EXISTS `studies` (
     `study_id` INTEGER AUTO_INCREMENT PRIMARY KEY,
-    `name` varchar(128) NOT NULL,
+    `name` varchar(128) NOT NULL UNIQUE COMMENT 'Name of the study, must be unique',
     `description` TEXT,
     `external_id` VARCHAR(128) NULL COMMENT 'External identifier for the study, e.g. from a registry or sponsor',
     `study_type_id` INTEGER COMMENT 'Type of study, e.g. HDSS, Cohort, Survey, etc.',

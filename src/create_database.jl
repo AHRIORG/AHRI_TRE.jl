@@ -3,4 +3,4 @@ using ConfigEnv
 
 dotenv()
 
-@time createdatabase(ENV["TRE_DATABASE_PATH"], ENV["TRE_DBNAME"], replace=true, sqlite=true)
+createdatabase(ENV["TRE_SERVER"], ENV["TRE_USER"], ENV["TRE_PWD"], ENV["TRE_DBNAME"], replace=true)
