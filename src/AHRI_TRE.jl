@@ -21,14 +21,11 @@ export
     Vocabulary, VocabularyItem,
     DataDocument, DocCSV, DocXLSX, DocPDF, read_data,
     AbstractStudy, 
-    AbstractIngest, sourceIngest, 
-    ingest_study, datasetlakename,
-    add_domain,
-    ingest_dictionary, save_dataset,
-    read_variables, get_vocabulary, add_variables, add_vocabulary, lookup_variables,
-    get_namedkey, get_variable_id, get_variable, get_valuetype, get_datasetname, updatevalue, insertdata, insertwithidentity,
+    datasetlakename,
+    lookup_variables,
+    get_namedkey, get_variable_id, get_variable, get_datasetname, updatevalue, insertdata, insertwithidentity,
     get_table, selectdataframe, prepareselectstatement, dataset_to_dataframe, dataset_to_arrow, dataset_to_csv,
-    dataset_variables, dataset_column, savedataframe, createdatabase, opendatabase
+    dataset_variables, dataset_column, savedataframe, createdatabase, opendatastore
 
     """
 Structs for vocabulary
@@ -60,14 +57,6 @@ Base.@kwdef mutable struct Study <: AbstractStudy
 
 end
 
-abstract type AbstractIngest end
-
-Base.@kwdef mutable struct StudyIngest <: AbstractIngest
-    study::AbstractStudy = Study() # Study information
-    ingested::DateTime = now() # Date of ingestion
-    responsible::String = "0000-0000-0000-0000" # ORCID of the person responsible for ingestion
-end
-
 """
     get_study(db::DBInterface.Connection, name)
 
@@ -96,20 +85,6 @@ Return the name of the dataset in the data lake, based on dataset_id
 This is used to store the dataset in the data lake.
 """
 datasetlakename(dataset_id::Integer)::String = "dataset_$dataset_id"
-
-"""
-    save_dataset(db::DBInterface.Connection, dataset::AbstractDataFrame, name::String, description::String, unit_of_analysis_id::Integer,
-    domain_id::Integer, transformation_id::Integer, ingestion_id::Integer, lake::DBInterface.Connection=nothing)::Integer
-
-Insert dataframe containing dataset into TRE database and returns the dataset_id
-if lake is not nothing, the dataset data is stored in the data lake.
-"""
-function save_dataset(db::DBInterface.Connection, dataset::AbstractDataFrame, name::String, description::String, unit_of_analysis_id::Integer,
-    domain_id::Integer, transformation_id::Integer, ingestion_id::Integer, lake::DBInterface.Connection=nothing)::Integer
-    dataset_id = 0;
-   @info "Dataset $name ingested."
-    return dataset_id
-end
 """
     convert_missing_to_string!(df::DataFrame)
 
@@ -353,7 +328,48 @@ function get_datasetname(db::DBInterface.Connection, dataset)
         return name # Return name without extension
     end
 end
+"""
+    path_to_file_uri(path::AbstractString) -> String
 
+Converts a local file path to a properly encoded file:// URI.
+"""
+function path_to_file_uri(path::AbstractString)
+    # Normalize and get absolute path
+    abs_path = string(normpath(abspath(path)))
+
+    # Handle Windows paths (convert backslashes and add slash before drive letter)
+    if Sys.iswindows()
+        abs_path = replace(abs_path, "\\" => "/")
+        if occursin(r"^[A-Za-z]:", abs_path)
+            abs_path = "/" * abs_path  # e.g. /C:/Users/...
+        end
+    end
+
+    # Percent-encode using URI constructor
+    uri = URI("file://" * abs_path)
+    return string(uri)
+end
+
+"""
+    blake3_digest_hex(path::AbstractString) -> String
+
+Computes the BLAKE3 digest of a file and returns it as a hexadecimal string.
+"""
+function blake3_digest_hex(path::AbstractString)
+    open(path, "r") do io
+        digest_bytes = blake3sum(io)
+        return lowercase(bytes2hex(digest_bytes))
+    end
+end
+"""
+    verify_blake3_digest(path::AbstractString, expected_hex::AbstractString) -> Bool
+
+Checks whether the BLAKE3 digest of the file matches the expected hex digest.
+"""
+function verify_blake3_digest(path::AbstractString, expected_hex::AbstractString)
+    digest = blake3_digest_hex(path)
+    return lowercase(digest) == lowercase(expected_hex)
+end
 include("constants.jl")
 include("tredatabase.jl")
 
