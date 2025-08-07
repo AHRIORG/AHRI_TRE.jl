@@ -536,10 +536,12 @@ function createentities(conn::MySQL.Connection)
     CREATE TABLE IF NOT EXISTS `entity_instances` (
     `instance_id` BIGINT AUTO_INCREMENT PRIMARY KEY,
     `entity_id` INTEGER NOT NULL COMMENT 'ID of the entity this instance belongs to',
+    `transformation_id` INTEGER NOT NULL COMMENT 'ID of the transformation that created this entity instance',
     `study_id` INTEGER NOT NULL COMMENT 'ID of the study this entity instance is associated with',
     `external_id` VARCHAR(128) NULL COMMENT 'External identifier for the entity instance, e.g. from a study database, registry or sponsor',
     CONSTRAINT `fk_entity_instances_entity_id` FOREIGN KEY (`entity_id`) REFERENCES `entities` (`entity_id`) ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT `fk_entity_instances_study_id` FOREIGN KEY (`study_id`) REFERENCES `studies` (`study_id`) ON DELETE CASCADE ON UPDATE NO ACTION
+    CONSTRAINT `fk_entity_instances_study_id` FOREIGN KEY (`study_id`) REFERENCES `studies` (`study_id`) ON DELETE CASCADE ON UPDATE NO ACTION,
+    CONSTRAINT `fk_entity_instances_transformation_id` FOREIGN KEY (`transformation_id`) REFERENCES `transformations` (`transformation_id`) ON DELETE CASCADE ON UPDATE NO ACTION
     ) COMMENT = 'Entity instances table to record specific instances of entities in a study, allowing for tracking of entities across studies';
     """
     DBInterface.execute(conn, sql)
@@ -553,9 +555,11 @@ function createentities(conn::MySQL.Connection)
     `valid_from` DATE NOT NULL COMMENT 'Start date of the relationship instance, e.g. when the relationship episode started',
     `valid_to` DATE NOT NULL COMMENT 'End date of the relationship instance, e.g. when the relationship episode ended',
     `external_id` VARCHAR(128) NULL COMMENT 'External identifier for the relationship instance, e.g. from a study database, registry or sponsor',
+    `transformation_id` INTEGER NOT NULL COMMENT 'ID of the transformation that created this entity relation instance',
     CONSTRAINT `fk_relationship_instances_entityrelationship_id` FOREIGN KEY (`entityrelation_id`) REFERENCES `entityrelations` (`entityrelation_id`) ON DELETE CASCADE ON UPDATE NO ACTION,
     CONSTRAINT `fk_relationship_instances_entity_instance_id_1` FOREIGN KEY (`entity_instance_id_1`) REFERENCES `entity_instances` (`instance_id`) ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT `fk_relationship_instances_entity_instance_id_2` FOREIGN KEY (`entity_instance_id_2`) REFERENCES `entity_instances` (`instance_id`) ON DELETE CASCADE ON UPDATE NO ACTION
+    CONSTRAINT `fk_relationship_instances_entity_instance_id_2` FOREIGN KEY (`entity_instance_id_2`) REFERENCES `entity_instances` (`instance_id`) ON DELETE CASCADE ON UPDATE NO ACTION,
+    CONSTRAINT `fk_relationship_instances_transformation_id` FOREIGN KEY (`transformation_id`) REFERENCES `transformations` (`transformation_id`) ON DELETE CASCADE ON UPDATE NO ACTION
     ) COMMENT = 'Relation instances table to record specific instances of entity relationships, allowing for tracking of relationships between entity instances in a study';
     """
     DBInterface.execute(conn, sql)
