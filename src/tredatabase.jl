@@ -256,7 +256,7 @@ function createtransformations(conn::MySQL.Connection)
     sql = raw"""
     CREATE TABLE IF NOT EXISTS `transformations` (
     `transformation_id` INTEGER AUTO_INCREMENT PRIMARY KEY,
-    `transformation_type` ENUM('ingest','transform') NOT NULL COMMENT 'Type of transformation, either ingesting data or transforming existing data',
+    `transformation_type` ENUM('ingest','transform','entity') NOT NULL COMMENT 'Type of transformation, either ingesting data, creating entity-instances or transforming existing data',
     `description` TEXT NOT NULL,
     `repository_url` TEXT NULL COMMENT 'URL to the repository where the transformation script is stored', 
     `commit_hash` CHAR(40) NULL COMMENT 'git commit hash',
