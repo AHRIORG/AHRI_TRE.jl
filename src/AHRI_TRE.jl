@@ -21,14 +21,11 @@ export
     Vocabulary, VocabularyItem,
     DataDocument, DocCSV, DocXLSX, DocPDF, read_data,
     AbstractStudy, 
-    AbstractIngest, sourceIngest, 
-    ingest_study, datasetlakename,
-    add_domain,
-    ingest_dictionary, save_dataset,
-    read_variables, get_vocabulary, add_variables, add_vocabulary, lookup_variables,
-    get_namedkey, get_variable_id, get_variable, get_valuetype, get_datasetname, updatevalue, insertdata, insertwithidentity,
+    datasetlakename,
+    lookup_variables,
+    get_namedkey, get_variable_id, get_variable, get_datasetname, updatevalue, insertdata, insertwithidentity,
     get_table, selectdataframe, prepareselectstatement, dataset_to_dataframe, dataset_to_arrow, dataset_to_csv,
-    dataset_variables, dataset_column, savedataframe, createdatabase, opendatabase
+    dataset_variables, dataset_column, savedataframe, createdatabase, opendatastore
 
     """
 Structs for vocabulary
@@ -60,14 +57,6 @@ Base.@kwdef mutable struct Study <: AbstractStudy
 
 end
 
-abstract type AbstractIngest end
-
-Base.@kwdef mutable struct StudyIngest <: AbstractIngest
-    study::AbstractStudy = Study() # Study information
-    ingested::DateTime = now() # Date of ingestion
-    responsible::String = "0000-0000-0000-0000" # ORCID of the person responsible for ingestion
-end
-
 """
     get_study(db::DBInterface.Connection, name)
 
@@ -96,20 +85,6 @@ Return the name of the dataset in the data lake, based on dataset_id
 This is used to store the dataset in the data lake.
 """
 datasetlakename(dataset_id::Integer)::String = "dataset_$dataset_id"
-
-"""
-    save_dataset(db::DBInterface.Connection, dataset::AbstractDataFrame, name::String, description::String, unit_of_analysis_id::Integer,
-    domain_id::Integer, transformation_id::Integer, ingestion_id::Integer, lake::DBInterface.Connection=nothing)::Integer
-
-Insert dataframe containing dataset into TRE database and returns the dataset_id
-if lake is not nothing, the dataset data is stored in the data lake.
-"""
-function save_dataset(db::DBInterface.Connection, dataset::AbstractDataFrame, name::String, description::String, unit_of_analysis_id::Integer,
-    domain_id::Integer, transformation_id::Integer, ingestion_id::Integer, lake::DBInterface.Connection=nothing)::Integer
-    dataset_id = 0;
-   @info "Dataset $name ingested."
-    return dataset_id
-end
 """
     convert_missing_to_string!(df::DataFrame)
 

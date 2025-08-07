@@ -28,11 +28,11 @@ function createdatabase(server, user, password, database; replace=false)
     end
 end
 """
-    opendatabase(server::AbstractString, user::AbstractString, password::AbstractString, database::AbstractString, lake_data::Union{String,Nothing}=nothing, lake_db::Union{String,Nothing}=nothing)
+    opendatastore(server::AbstractString, user::AbstractString, password::AbstractString, database::AbstractString, lake_data::Union{String,Nothing}=nothing, lake_db::Union{String,Nothing}=nothing)
 Open a database connection to a MySQL server with optional DuckDB data lake support.
 This function connects to a MySQL server using the provided credentials and database name.
 """
-function opendatabase(server::AbstractString, user::AbstractString, password::AbstractString, database::AbstractString,
+function opendatastore(server::AbstractString, user::AbstractString, password::AbstractString, database::AbstractString,
     lake_data::Union{String,Nothing}=nothing, lake_db::Union{String,Nothing}=nothing)
     conn = DBInterface.connect(MySQL.Connection, server, user, password, database) #, unix_socket="/var/run/mysqld/mysqld.sock"
     @info "Connected to database $(database) on server $(server)"
