@@ -18,19 +18,32 @@ using URIs
 using UUIDs
 
 export
+    DataStore,
     Vocabulary, VocabularyItem,
-    DataDocument, DocCSV, DocXLSX, DocPDF, read_data,
-    AbstractStudy, 
+    AbstractStudy, Study,
+    opendatastore, closedatastore,
+    upsert_study,
     datasetlakename,
     lookup_variables,
-    get_namedkey, get_variable_id, get_variable, get_datasetname, updatevalue, insertdata, insertwithidentity,
+    get_namedkey, get_variable_id, get_variable, get_datasetname, updatevalues, insertdata, insertwithidentity,
     get_table, selectdataframe, prepareselectstatement, dataset_to_dataframe, dataset_to_arrow, dataset_to_csv,
     dataset_variables, dataset_column, savedataframe, createdatabase, opendatastore
 
-    """
-Structs for vocabulary
-"""
-
+#region TRE Connection
+Base.@kwdef mutable struct DataStore
+    server::String = "localhost"
+    user::String = "root"
+    password::String = ""
+    dbname::String = "AHRI_TRE"
+    lake_data::String = "/data/datalake" # Path to DuckDB data lake
+    lake_db::String = "ducklake_catalog" # Database name for ducklake metadata database
+    lake_user::String = "ducklake_user" # User for DuckDB data lake
+    lake_password::String = "" # Password for DuckDB data lake
+    store::Union{DBInterface.Connection,Nothing} = nothing # Connection to the TRE datastore
+    lake::Union{DBInterface.Connection,Nothing} = nothing # Connection to the DuckDB data lake
+end
+#endregion
+#region Structs for vocabulary
 struct VocabularyItem
     value::Int64
     code::String
@@ -42,19 +55,30 @@ struct Vocabulary
     description::String
     items::Vector{VocabularyItem}
 end
-
+#endregion
 """
 Struct for study-related information
 """
 abstract type AbstractStudy end
 
 Base.@kwdef mutable struct Study <: AbstractStudy
-
+    study_id::Int64 = 0
     name::String = "study_name"
     description::String = "study description"
-    # Study type
+    external_id::String = "external_id"
     study_type_id::Integer = 1
+end
 
+function upsert_study(study::Study, store::DataStore)::Study
+    db = store.store
+    if ismissing(study.study_id) || study.study_id == 0
+        study.study_id = insertwithidentity(store.store,"studies", ["name", "description", "external_id", "study_type_id"],
+                                            [study.name, study.description, study.external_id, study.study_type_id])
+    else
+        updatevalues(db, "studies", "study_id", study.study_id, ["name", "description", "external_id", "study_type_id"],
+                     [study.name, study.description, study.external_id, study.study_type_id])
+    end
+    return study
 end
 
 """

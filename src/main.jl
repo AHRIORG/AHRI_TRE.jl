@@ -11,16 +11,51 @@ using Dates
 dotenv()
 
 #region Setup Logging
-logger = FormatLogger(open("logs/create_database.log", "w")) do io, args
-    # Write the module, level and message only
-    println(io, args._module, " | ", "[", args.level, "] ", args.message)
+logger = FormatLogger(open("logs/study_update.log", "w")) do io, args
+  # Write the module, level and message only
+  println(io, args._module, " | ", "[", args.level, "] ", args.message)
 end
 minlogger = MinLevelLogger(logger, Logging.Info)
 old_logger = global_logger(minlogger)
 
+#Execution flags
+do_createstudy = false
+do_updatestudy = true
+
+startime = Dates.now()
+datastore = AHRI_TRE.DataStore(
+    server = ENV["TRE_SERVER"],
+    user = ENV["TRE_USER"],
+    password = ENV["TRE_PWD"],
+    dbname = ENV["TRE_DBNAME"],
+    lake_password = ENV["LAKE_PASSWORD"],
+    lake_user = ENV["LAKE_USER"]
+)
+datastore = AHRI_TRE.opendatastore(datastore)
 try
   println("Execution started at: ", Dates.now())
-  createdatabase(ENV["TRE_SERVER"], ENV["TRE_USER"], ENV["TRE_PWD"], ENV["TRE_DBNAME"], replace = true)
+  if do_createstudy
+    study = Study(
+        name = "APCC Update",
+        description = "Update APCC cohort data and contact information",
+        external_id = "APCC",
+        study_type_id = 3  
+    )
+    study = upsert_study(study, datastore)
+    @info "Study created or updated: $(study.name) with ID $(study.study_id)"
+  end
+  if do_updatestudy
+    study = Study(
+        study_id = 1,  # Assuming study_id 1 exists
+        name = "APCC Update",
+        description = "Update APCC cohort data and contact information",
+        external_id = "APCC_Update",
+        study_type_id = 3  
+    )
+    study = upsert_study(study, datastore)
+    @info "Study updated: $(study.name) with ID $(study.study_id)"
+  end
 finally
-    global_logger(old_logger)  # Restore the old logger
+  closedatastore(datastore)
+  global_logger(old_logger)  # Restore the old logger
 end
