@@ -17,13 +17,14 @@ logger = FormatLogger(open("logs/create_store.log", "w")) do io, args
 end
 minlogger = MinLevelLogger(logger, Logging.Info)
 old_logger = global_logger(minlogger)
+start_time = Dates.now()
 
-#Execution flags
-do_createstore = false
-do_createstudy = true
-do_updatestudy = true
+#region Execution flags
+do_createstore = true
+do_createstudy = false
+do_updatestudy = false
+#endregion
 
-startime = Dates.now()
 datastore = AHRI_TRE.DataStore(
   server=ENV["TRE_SERVER"],
   user=ENV["TRE_USER"],
@@ -62,5 +63,7 @@ try
   end
 finally
   closedatastore(datastore)
+  elapsed = now() - start_time
+  @info "===== Completed $(Dates.format(now(), "yyyy-mm-dd HH:MM")) duration $(canonicalize(Dates.CompoundPeriod(elapsed)))"
   global_logger(old_logger)  # Restore the old logger
 end
