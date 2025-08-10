@@ -1,7 +1,7 @@
 module AHRI_TRE
 
 using DataFrames
-using MySQL
+using LibPQ
 using DBInterface
 using DuckDB
 using ConfigEnv
@@ -27,7 +27,7 @@ export
     lookup_variables,
     get_namedkey, get_variable_id, get_variable, get_datasetname, updatevalues, insertdata, insertwithidentity,
     get_table, selectdataframe, prepareselectstatement, dataset_to_dataframe, dataset_to_arrow, dataset_to_csv,
-    dataset_variables, dataset_column, savedataframe, createdatabase, opendatastore
+    dataset_variables, dataset_column, savedataframe, opendatastore, createdatastore
 
 #region TRE Connection
 Base.@kwdef mutable struct DataStore
@@ -62,21 +62,63 @@ Struct for study-related information
 abstract type AbstractStudy end
 
 Base.@kwdef mutable struct Study <: AbstractStudy
-    study_id::Int64 = 0
+    study_id::Union{UUID,Nothing} = nothing
     name::String = "study_name"
     description::String = "study description"
     external_id::String = "external_id"
     study_type_id::Integer = 1
 end
+"""
+    createdatastore(store::DataStore; superuser::String="postgres", superpwd::String="", port::Integer=5432)
+
+Create or replace a PostgreSQL database for the TRE datastore, including the datalake if specified.
+This function creates a PostgreSQL database with the specified name and user credentials, and optionally creates a data lake using the DuckDb extension ducklake.
+    store::DataStore: The DataStore object containing connection details for the datastore and datalake databases.
+    superuser::String: The superuser name for PostgreSQL (default is "postgres").
+    superpwd::String: The superuser password for PostgreSQL (default is empty).
+    port::Integer: The port number for the PostgreSQL server (default is 5432
+NB: ONLY USE THIS FUNCTION IN DEVELOPMENT OR TESTING ENVIRONMENTS,
+    as it will drop the existing database, lake and all its contents.
+"""
+function createdatastore(store::DataStore; superuser::String="postgres", superpwd::String="", port::Integer=5432)
+    maint = DBInterface.connect(LibPQ.Connection, "host=$(store.server) port=$(port) dbname=postgres user=$(superuser) password=$(superpwd)")
+    try
+        replace_database(maint, store.dbname, store.user, store.password)
+    finally
+        DBInterface.close!(maint)
+    end
+
+    if !isnothing(store.lake_db) && !isempty(store.lake_db)
+        maint2 = DBInterface.connect(LibPQ.Connection, "host=$(store.server) port=$(port) dbname=postgres user=$(superuser) password=$(superpwd)")
+        try
+            replace_database(maint2, store.lake_db, store.lake_user, store.lake_password)
+        finally
+            DBInterface.close!(maint2)
+        end
+    end
+
+    # Open connection then build schema via createdatabase(conn)
+    conn = nothing
+    try
+        conn = DBInterface.connect(LibPQ.Connection, "host=$(store.server) port=$(port) dbname=$(store.dbname) user=$(store.user) password=$(store.password)")
+        createdatabase(conn)
+    finally
+        # Reconnect as application user if different credentials supplied
+        DBInterface.close!(conn)
+    end
+end
 
 function upsert_study(study::Study, store::DataStore)::Study
     db = store.store
-    if ismissing(study.study_id) || study.study_id == 0
-        study.study_id = insertwithidentity(store.store,"studies", ["name", "description", "external_id", "study_type_id"],
-                                            [study.name, study.description, study.external_id, study.study_type_id])
+    if study.study_id === nothing
+        # Insert letting PostgreSQL assign uuidv7() default
+        sql = raw"INSERT INTO studies (name, description, external_id, study_type_id) VALUES ($1,$2,$3,$4) RETURNING study_id;"
+        stmt = DBInterface.prepare(db, sql)
+        df = DBInterface.execute(stmt, (study.name, study.description, study.external_id, study.study_type_id)) |> DataFrame
+        study.study_id = df[1, :study_id]
     else
         updatevalues(db, "studies", "study_id", study.study_id, ["name", "description", "external_id", "study_type_id"],
-                     [study.name, study.description, study.external_id, study.study_type_id])
+            [study.name, study.description, study.external_id, study.study_type_id])
     end
     return study
 end
@@ -161,30 +203,12 @@ function get_namedkey(db::DBInterface.Connection, table, key, keycol)
     end
 end
 
-
-
-"""
-    get_variable_id(db::DBInterface.Connection, domain, name)
-
-Returns the `variable_id` of variable named `name` in domain with id `domain`
-"""
-function get_variable_id(db::DBInterface.Connection, domain, name)
-    stmt = prepareselectstatement(db, "variables", ["variable_id"], ["domain_id", "name"])
-    result = DBInterface.execute(stmt, [domain, name]) |> DataFrame
-    if nrow(result) == 0
-        return missing
-    else
-        return result[1, :variable_id]
-    end
-end
-
-
 """
     get_variable_id(db::DBInterface.Connection, domain, name)
 
     Returns the `variable_id` of variable named `name` in domain with id `domain`
 """
-function get_variable_id(db::ODBC.Connection, domain, name)
+function get_variable_id(db::DBInterface.Connection, domain, name)
     stmt = prepareselectstatement(db, "variables", ["variable_id"], ["domain_id", "name"])
     result = DBInterface.execute(stmt, [domain, name]; iterate_rows=true) |> DataFrame
     if nrow(result) == 0
