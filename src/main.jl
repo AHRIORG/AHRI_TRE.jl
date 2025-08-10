@@ -11,18 +11,21 @@ using Dates
 dotenv()
 
 #region Setup Logging
-logger = FormatLogger(open("logs/create_store.log", "w")) do io, args
+logger = FormatLogger(open("logs/entities.log", "w")) do io, args
   # Write the module, level and message only
   println(io, args._module, " | ", "[", args.level, "] ", args.message)
 end
 minlogger = MinLevelLogger(logger, Logging.Info)
 old_logger = global_logger(minlogger)
+
 start_time = Dates.now()
 
 #region Execution flags
-do_createstore = true
+do_createstore = false
 do_createstudy = false
 do_updatestudy = false
+do_insertdomain = false
+do_entities = true
 #endregion
 
 datastore = AHRI_TRE.DataStore(
@@ -47,19 +50,59 @@ try
       external_id="APCC",
       study_type_id=3
     )
-    study = upsert_study(study, datastore)
+    study = upsert_study!(study, datastore)
     @info "Study created or updated: $(study.name) with ID $(study.study_id)"
   end
   if do_updatestudy
     study = Study(
-      study_id=1,  # Assuming study_id 1 exists
+      study_id= get_study(datastore,"APCC Update"),  # Assuming "APCC Update" exists
       name="APCC Update",
       description="Update APCC cohort data and contact information",
       external_id="APCC_Update",
       study_type_id=3
     )
-    study = upsert_study(study, datastore)
+    study = upsert_study!(study, datastore)
     @info "Study updated: $(study.name) with ID $(study.study_id)"
+  end
+  if do_insertdomain
+    domain = Domain(
+      name="APCC",
+      uri="https://apcc.africa",
+      description="African Population Cohorts Consortium"
+    )
+    domain = upsert_domain!(domain, datastore)
+    @info "Domain inserted: $(domain.name) with ID $(domain.domain_id)"
+  end
+  if do_entities
+    entity = Entity(
+      name="APCC Cohort",
+      description="African Population Cohorts Consortium Cohort",
+      domain_id=get_domain(datastore, "APCC").domain_id,
+      ontology_namespace="apcc",
+      ontology_class = "http://purl.obolibrary.org/obo/NCIT_C61512"
+    )
+    entity = upsert_entity!(entity, datastore)
+    @info "Entity inserted: $(entity.name) with ID $(entity.entity_id)"
+    entity2 = Entity(
+      name="Person",
+      description="A person that can be contacted at/represent a cohort",
+      domain_id=entity.domain_id,
+      ontology_namespace="foaf",
+      ontology_class = "http://xmlns.com/foaf/0.1/Person"
+    )
+    entity2 = upsert_entity!(entity2, datastore)
+    @info "Entity inserted: $(entity2.name) with ID $(entity2.entity_id)"
+    relation = EntityRelation(
+      name="hasContact",
+      description="A contact person for a cohort",
+      domain_id=entity.domain_id,
+      entity_id_1=entity.entity_id,
+      entity_id_2=entity2.entity_id,
+      ontology_namespace="apcc",
+      ontology_class = "http://purl.obolibrary.org/obo/RO_0000052",
+    )
+    relation = upsert_entityrelation!(relation, datastore)
+    @info "Entity relation inserted: $(relation.name) with ID $(relation.entityrelation_id)"
   end
 finally
   closedatastore(datastore)

@@ -20,16 +20,17 @@ using UUIDs
 export
     DataStore,
     Vocabulary, VocabularyItem,
-    AbstractStudy, Study,
+    AbstractStudy, Study, Domain, Entity, EntityRelation,
     opendatastore, closedatastore,
-    upsert_study,
+    upsert_study!, upsert_domain!, get_domain, get_study,
+    upsert_entity!, get_entity, upsert_entityrelation!, get_entityrelation,
     datasetlakename,
     lookup_variables,
     get_namedkey, get_variable_id, get_variable, get_datasetname, updatevalues, insertdata, insertwithidentity,
     get_table, selectdataframe, prepareselectstatement, dataset_to_dataframe, dataset_to_arrow, dataset_to_csv,
     dataset_variables, dataset_column, savedataframe, opendatastore, createdatastore
 
-#region TRE Connection
+#region Structure
 Base.@kwdef mutable struct DataStore
     server::String = "localhost"
     user::String = "root"
@@ -42,23 +43,17 @@ Base.@kwdef mutable struct DataStore
     store::Union{DBInterface.Connection,Nothing} = nothing # Connection to the TRE datastore
     lake::Union{DBInterface.Connection,Nothing} = nothing # Connection to the DuckDB data lake
 end
-#endregion
-#region Structs for vocabulary
 struct VocabularyItem
     value::Int64
     code::String
     description::Union{String,Missing}
 end
-
 struct Vocabulary
     name::String
     description::String
     items::Vector{VocabularyItem}
 end
-#endregion
-"""
-Struct for study-related information
-"""
+
 abstract type AbstractStudy end
 
 Base.@kwdef mutable struct Study <: AbstractStudy
@@ -68,6 +63,37 @@ Base.@kwdef mutable struct Study <: AbstractStudy
     external_id::String = "external_id"
     study_type_id::Integer = 1
 end
+
+Base.@kwdef mutable struct Domain
+    domain_id::Union{Int,Nothing} = nothing
+    name::String
+    uri::Union{Missing,String} = missing
+    description::Union{Missing,String} = missing
+end
+
+Base.@kwdef mutable struct Entity
+    entity_id::Union{Int,Nothing} = nothing
+    domain_id::Int
+    uuid::Union{UUID,Nothing} = nothing
+    name::String
+    description::Union{Missing,String} = missing
+    ontology_namespace::Union{Missing,String} = missing
+    ontology_class::Union{Missing,String} = missing
+end
+
+Base.@kwdef mutable struct EntityRelation
+    entityrelation_id::Union{Int,Nothing} = nothing
+    entity_id_1::Int
+    entity_id_2::Int
+    domain_id::Int
+    uuid::Union{UUID,Nothing} = nothing
+    name::String
+    description::Union{Missing,String} = missing
+    ontology_namespace::Union{Missing,String} = missing
+    ontology_class::Union{Missing,String} = missing
+end
+
+#endregion
 """
     createdatastore(store::DataStore; superuser::String="postgres", superpwd::String="", port::Integer=5432)
 
@@ -108,15 +134,25 @@ function createdatastore(store::DataStore; superuser::String="postgres", superpw
     end
 end
 
-function upsert_study(study::Study, store::DataStore)::Study
+function upsert_study!(study::Study, store::DataStore)::Study
     db = store.store
     if study.study_id === nothing
         # Insert letting PostgreSQL assign uuidv7() default
-        sql = raw"INSERT INTO studies (name, description, external_id, study_type_id) VALUES ($1,$2,$3,$4) RETURNING study_id;"
+        @info "Inserting new study: $(study.name)"
+        sql = raw"""
+        INSERT INTO studies (name, description, external_id, study_type_id)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (name) DO UPDATE
+        SET description   = EXCLUDED.description,
+            external_id   = EXCLUDED.external_id,
+            study_type_id = EXCLUDED.study_type_id
+        RETURNING study_id;
+        """
         stmt = DBInterface.prepare(db, sql)
         df = DBInterface.execute(stmt, (study.name, study.description, study.external_id, study.study_type_id)) |> DataFrame
-        study.study_id = df[1, :study_id]
+        study.study_id = UUID(df[1, :study_id])
     else
+        @info "Updating existing study: $(study.name) with ID $(study.study_id)"
         updatevalues(db, "studies", "study_id", study.study_id, ["name", "description", "external_id", "study_type_id"],
             [study.name, study.description, study.external_id, study.study_type_id])
     end
@@ -128,10 +164,245 @@ end
 
 Return the `source_id` of source `name`, returns `missing` if source doesn't exist
 """
-function get_study(db::DBInterface.Connection, name)
-    return get_namedkey(db, "studies", name, :study_id)
+function get_study(store::DataStore, name::AbstractString)::Union{UUID,Nothing}
+    study_id = get_namedkey(store.store, "studies", name, :study_id)
+    @info "Study ID for $(name): $(study_id)"
+    if ismissing(study_id)
+        return nothing
+    end
+    return UUID(study_id)
 end
 
+"""
+    upsert_domain!(domain::Domain, store::DataStore)::Domain
+
+Create or update a domain record. If a domain with the same (name, uri) already
+exists (treating NULL uri correctly), it updates and returns its domain_id.
+Otherwise, it inserts a new row and returns the new domain_id.
+"""
+function upsert_domain!(domain::Domain, store::DataStore)::Domain
+    db = store.store
+
+    # 1) Does a matching domain already exist?
+    sql_get = raw"""
+        SELECT domain_id
+        FROM domains
+        WHERE name = $1
+          AND ( ($2::text IS NULL AND uri IS NULL) OR uri = $2 )
+        LIMIT 1;
+    """
+    stmt_get = DBInterface.prepare(db, sql_get)
+    df = DBInterface.execute(stmt_get, (domain.name, domain.uri)) |> DataFrame
+
+    if nrow(df) == 0
+        @info "Insert new domain: $(domain.name) with URI '$(domain.uri)'"
+        sql_ins = raw"""
+            INSERT INTO domains (name, uri, description)
+            VALUES ($1, $2, $3)
+            RETURNING domain_id;
+        """
+        stmt_ins = DBInterface.prepare(db, sql_ins)
+        ins = DBInterface.execute(stmt_ins, (domain.name, domain.uri, domain.description)) |> DataFrame
+        domain.domain_id = ins[1, :domain_id]
+    else
+        @info "Update existing domain: $(domain.name) with URI '$(domain.uri)'"
+        domain.domain_id = df[1, :domain_id]
+        sql_upd = raw"""
+            UPDATE domains
+               SET description = $3
+             WHERE domain_id   = $4
+             RETURNING domain_id;
+        """
+        stmt_upd = DBInterface.prepare(db, sql_upd)
+        DBInterface.execute(stmt_upd, (domain.name, domain.uri, domain.description, domain.domain_id))
+    end
+
+    return domain
+end
+# Get a domain by name (and optional URI), returns Domain or nothing
+"""
+    get_domain(store::DataStore, name::AbstractString; uri::Union{Nothing,String}=nothing)::Union{Domain,Nothing}
+
+Return a Domain object by its name (and optional URI) in the specified DataStore.
+"""
+function get_domain(store::DataStore, name::AbstractString; uri::Union{Nothing,String}=nothing)::Union{Domain,Nothing}
+    db = store.store
+    if isnothing(uri)
+        sql = raw"""
+            SELECT domain_id, name, uri, description
+              FROM domains
+             WHERE name = $1
+             LIMIT 1;
+            """
+    else
+        sql = raw"""
+            SELECT domain_id, name, uri, description
+              FROM domains
+             WHERE name = $1
+               AND uri = $2 
+             LIMIT 1;
+            """
+    end
+    stmt = DBInterface.prepare(db, sql)
+    @info "Statement query: $(stmt.query)"
+    if isnothing(uri)
+        df = DBInterface.execute(stmt, (name,)) |> DataFrame
+    else
+        df = DBInterface.execute(stmt, (name, uri)) |> DataFrame
+    end
+    if nrow(df) == 0
+        @info "No domain found with name: $(name) and URI: $(uri)"
+        return nothing
+    end
+    row = df[1, :]
+    return Domain(
+        domain_id=row.domain_id,
+        name=row.name,
+        uri=coalesce(row.uri, missing),
+        description=coalesce(row.description, missing)
+    )
+end
+
+"""
+    upsert_entity!(store::DataStore, e::Entity)::Entity
+
+Create or update an entity record. If an entity with the same (domain_id, name) already exists, it updates and returns its entity_id.
+"""
+function upsert_entity!(e::Entity, store::DataStore)::Entity
+    conn = store.store
+    if e.entity_id === nothing
+        @info "Inserting new entity: $(e.name) in domain ID $(e.domain_id)"
+        sql = raw"""
+            INSERT INTO entities (domain_id, name, description, ontology_namespace, ontology_class)
+            VALUES ($1,$2,$3,$4,$5)
+            ON CONFLICT (domain_id, name) DO UPDATE
+              SET description = EXCLUDED.description,
+                  ontology_namespace = EXCLUDED.ontology_namespace,
+                  ontology_class = EXCLUDED.ontology_class
+            RETURNING entity_id, uuid;
+        """
+        df = DBInterface.execute(DBInterface.prepare(conn, sql),
+            (e.domain_id, e.name, e.description, e.ontology_namespace, e.ontology_class)) |> DataFrame
+        @info "Rows affected: $(nrow(df))"
+        e.entity_id = df[1, :entity_id]
+        e.uuid = UUID(df[1, :uuid])
+    else
+        sql = raw"""
+            UPDATE entities
+               SET domain_id = $2,
+                   name = $3,
+                   description = $4,
+                   ontology_namespace = $5,
+                   ontology_class = $6
+             WHERE entity_id = $1
+             RETURNING uuid;
+        """
+        df = DBInterface.execute(DBInterface.prepare(conn, sql),
+            (e.entity_id, e.domain_id, e.name, e.description, e.ontology_namespace, e.ontology_class)) |> DataFrame
+        e.uuid = UUID(df[1, :uuid])
+    end
+    return e
+end
+
+"""
+    upsert_entityrelation!(store::DataStore, r::EntityRelation)::EntityRelation
+
+Create or update an entity relation record. If a relation with the same (domain_id, name) already exists, it updates and returns its entityrelation_id.
+"""
+function upsert_entityrelation!(r::EntityRelation, store::DataStore)::EntityRelation
+    conn = store.store
+    if r.entityrelation_id === nothing
+        sql = raw"""
+            INSERT INTO entityrelations
+              (entity_id_1, entity_id_2, domain_id, name, description, ontology_namespace, ontology_class)
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
+            ON CONFLICT (domain_id, name) DO UPDATE
+              SET description = EXCLUDED.description,
+                  ontology_namespace = EXCLUDED.ontology_namespace,
+                  ontology_class = EXCLUDED.ontology_class
+            RETURNING entityrelation_id, uuid;
+        """
+        df = DBInterface.execute(DBInterface.prepare(conn, sql),
+            (r.entity_id_1, r.entity_id_2, r.domain_id, r.name, r.description, r.ontology_namespace, r.ontology_class)) |> DataFrame
+        r.entityrelation_id = df[1, :entityrelation_id]
+        r.uuid = UUID(df[1, :uuid])
+    else
+        sql = raw"""
+            UPDATE entityrelations
+               SET entity_id_1 = $2,
+                   entity_id_2 = $3,
+                   domain_id = $4,
+                   name = $5,
+                   description = $6,
+                   ontology_namespace = $7,
+                   ontology_class = $8
+             WHERE entityrelation_id = $1
+             RETURNING uuid;
+        """
+        df = DBInterface.execute(DBInterface.prepare(conn, sql),
+            (r.entityrelation_id, r.entity_id_1, r.entity_id_2, r.domain_id, r.name, r.description, r.ontology_namespace, r.ontology_class)) |> DataFrame
+        r.uuid = UUID(df[1, :uuid])
+    end
+    return r
+end
+"""
+    get_entity(store::DataStore, domain_id::Int, name::String)::Union{Entity,Nothing}
+
+Return an Entity object by its name in the specified domain.
+"""
+function get_entity(store::DataStore, domain_id::Int, name::String)::Union{Entity,Nothing}
+    conn = store.store
+    sql = raw"""
+        SELECT entity_id, domain_id, uuid, name, description, ontology_namespace, ontology_class
+          FROM entities
+         WHERE domain_id = $1 AND name = $2
+         LIMIT 1;
+    """
+    df = DBInterface.execute(DBInterface.prepare(conn, sql), (domain_id, name)) |> DataFrame
+    if nrow(df) == 0
+        return nothing
+    end
+    row = df[1, :]
+    return Entity(entity_id=row.entity_id,
+        domain_id=row.domain_id,
+        uuid=UUID(row.uuid),
+        name=row.name,
+        description=coalesce(row.description, missing),
+        ontology_namespace=coalesce(row.ontology_namespace, missing),
+        ontology_class=coalesce(row.ontology_class, missing))
+end
+
+"""
+    get_entityrelation_by_name(store::DataStore, domain_id::Int, name::String)::Union{EntityRelation,Nothing}
+
+Return an EntityRelation object by its name in the specified domain.
+"""
+function get_entityrelation_by_name(store::DataStore, domain_id::Int, name::String)::Union{EntityRelation,Nothing}
+    conn = store.store
+    sql = raw"""
+        SELECT entityrelation_id, entity_id_1, entity_id_2, domain_id, uuid, name,
+               description, ontology_namespace, ontology_class
+          FROM entityrelations
+         WHERE domain_id = $1 AND name = $2
+         LIMIT 1;
+    """
+    df = DBInterface.execute(DBInterface.prepare(conn, sql), (domain_id, name)) |> DataFrame
+    if nrow(df) == 0
+        return nothing
+    end
+    row = df[1, :]
+    return EntityRelation(
+        entityrelation_id=row.entityrelation_id,
+        entity_id_1=row.entity_id_1,
+        entity_id_2=row.entity_id_2,
+        domain_id=row.domain_id,
+        uuid=UUID(row.uuid),
+        name=row.name,
+        description=coalesce(row.description, missing),
+        ontology_namespace=coalesce(row.ontology_namespace, missing),
+        ontology_class=coalesce(row.ontology_class, missing)
+    )
+end
 
 """
     lookup_variables(db, variable_names, domain)
@@ -194,7 +465,7 @@ Supporting fuctions
  Return the integer key from table `table` in column `keycol` (`keycol` must be a `Symbol`) for key with name `key`
 """
 function get_namedkey(db::DBInterface.Connection, table, key, keycol)
-    stmt = prepareselectstatement(db, table, ["*"], ["name"])
+    stmt = prepareselectstatement(db, table, [String(keycol)], ["name"])
     df = DBInterface.execute(stmt, [key]) |> DataFrame
     if nrow(df) == 0
         return missing
