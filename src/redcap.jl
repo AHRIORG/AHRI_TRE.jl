@@ -1,0 +1,222 @@
+"""
+    redcap_metadata(url::AbstractString, token::AbstractString;
+                    forms::Union{Nothing,Vector{String}}=nothing) -> DataFrame
+
+Downloads REDCap data dictionary (metadata) as a DataFrame.
+Key columns you'll use: field_name, field_type, text_validation_type_or_show_slider_number,
+select_choices_or_calculations, field_label.
+"""
+function redcap_metadata(url::AbstractString, token::AbstractString; forms=nothing)::DataFrame
+    body = Dict(
+        "token" => token,
+        "content" => "metadata",
+        "format" => "json",
+        "returnFormat" => "json"
+    )
+    if forms !== nothing
+        for (i, f) in enumerate(forms)
+            body["forms[$(i-1)]"] = f
+        end
+    end
+    headers = ["Content-Type" => "application/x-www-form-urlencoded"]
+    form = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k, v) in body], "&")
+    resp = HTTP.post(url, headers, form)
+    resp.status == 200 || error("REDCap metadata error $(resp.status): $(String(resp.body))")
+    return DataFrame(JSON3.read(String(resp.body)))
+end
+"""
+    parse_redcap_choices(s::AbstractString) -> Vector{NamedTuple{(:value,:code,:description),Tuple{Int,String,Union{String,Missing}}}}
+
+Parses "1, Male | 2, Female" into a vector of items.
+- value: Int (left id)
+- code:  String (tokenized label; spaces -> `_`)
+- description: original label
+"""
+function parse_redcap_choices(s::AbstractString)
+    isempty(strip(s)) && return NamedTuple{(:value, :code, :description)}[(; value=0, code="", description=missing)][:0]
+    items = NamedTuple{(:value, :code, :description)}[]
+    for rawitem in split(s, '|')
+        part = strip(rawitem)
+        # Split on the first comma only
+        m = match(r"^\s*([^,]+)\s*,\s*(.+)$", part)
+        if m === nothing
+            # Fallback: try '=' form (rare)
+            m2 = match(r"^\s*([^=]+)\s*=\s*(.+)$", part)
+            m2 === nothing && continue
+            idstr = strip(m2.captures[1])
+            label = strip(m2.captures[2])
+        else
+            idstr = strip(m.captures[1])
+            label = strip(m.captures[2])
+        end
+        val = try
+            parse(Int, idstr)
+        catch
+            try
+                round(Int, parse(Float64, idstr))
+            catch
+                error("Non-integer value in choices: $idstr")
+            end
+        end
+        code = replace(lowercase(label), r"\s+" => "_")
+        push!(items, (; value=val, code=code, description=label))
+    end
+    return items
+end
+"""
+    map_value_type(field_type::String, validation::Union{Missing,String}) -> Int
+
+REDCap field_type and validation -> TRE value_type_id.
+"""
+function map_value_type(field_type::AbstractString, validation::Union{Missing,AbstractString})
+    ft = lowercase(String(field_type))
+    v = validation === missing ? "" : lowercase(String(validation))
+    if ft in ("radio", "dropdown", "checkbox", "yesno", "truefalse")
+        return _VT_ENUM
+    elseif ft == "calc"
+        # often numeric; you may refine with validation
+        return _VT_FLOAT
+    elseif ft == "slider"
+        return _VT_INT
+    elseif ft == "text"
+        if v in ("integer", "number")
+            return v == "integer" ? _VT_INT : _VT_FLOAT
+        elseif v in ("date_ymd", "date_mdy", "date_dmy")
+            return _VT_DATE
+        elseif v in ("datetime_ymd", "datetime_mdy", "datetime_dmy", "datetime_seconds_ymd", "datetime_seconds_mdy", "datetime_seconds_dmy")
+            return _VT_DATETIME
+        elseif v in ("time", "time_hh_mm_ss")
+            return _VT_TIME
+        else
+            return _VT_STRING
+        end
+    else
+        return _VT_STRING
+    end
+end
+"""
+    ensure_vocabulary!(db, vocab_name::String, description::String,
+                       items::Vector{NamedTuple{(:value,:code,:description),Tuple{Int,String,Union{String,Missing}}}}) -> Int
+
+Creates or reuses a vocabulary by name, and (re)loads items idempotently.
+Returns vocabulary_id.
+"""
+function ensure_vocabulary!(db, vocab_name::String, description::String, items)
+    # 1) Get or create vocabulary
+    q_get = DBInterface.prepare(
+        db,
+        raw"""
+    SELECT vocabulary_id FROM vocabularies WHERE name = $1 LIMIT 1;
+"""
+    )
+    df = DBInterface.execute(q_get, (vocab_name,)) |> DataFrame
+    vocab_id::Int
+    if nrow(df) == 0
+        vocab_id = insertwithidentity(db, "vocabularies",
+            ["name", "description"], (vocab_name, description))
+    else
+        vocab_id = df[1, :vocabulary_id]
+        # Keep description up to date
+        DBInterface.execute(db, raw"""UPDATE vocabularies SET description = $2 WHERE vocabulary_id = $1;""",
+            (vocab_id, description))
+    end
+
+    # 2) Load items idempotently: delete & reinsert for simplicity (fast + clean)
+    DBInterface.execute(db, raw"""DELETE FROM vocabulary_items WHERE vocabulary_id = $1;""", (vocab_id,))
+    ins = DBInterface.prepare(
+        db,
+        raw"""
+    INSERT INTO vocabulary_items (vocabulary_id, value, code, description)
+    VALUES ($1,$2,$3,$4);
+"""
+    )
+    for it in items
+        DBInterface.execute(ins, (vocab_id, it.value, it.code, it.description))
+    end
+    return vocab_id
+end
+
+"""
+    upsert_variable!(db, domain_id::Int, name::String; value_type_id::Int, vocabulary_id::Union{Nothing,Int}=nothing, description::Union{Missing,String}=missing) -> Int
+
+Upserts into variables on (domain_id, name). Returns variable_id.
+"""
+function upsert_variable!(db, domain_id::Int, name::String; value_type_id::Int, vocabulary_id::Union{Nothing,Int}=nothing, description=missing, note=missing)
+    df = DBInterface.execute(DBInterface.prepare(
+            db,
+            raw"""
+    INSERT INTO variables (domain_id, name, value_type_id, vocabulary_id, description, note)
+    VALUES ($1,$2,$3,$4,$5,$6)
+    ON CONFLICT (domain_id, name) DO UPDATE
+       SET value_type_id = EXCLUDED.value_type_id,
+           vocabulary_id = EXCLUDED.vocabulary_id,
+           description   = EXCLUDED.description,
+           note          = EXCLUDED.note
+    RETURNING variable_id;
+"""
+        ), (domain_id, name, value_type_id, vocabulary_id, description, note)) |> DataFrame
+    return df[1, :variable_id]
+end
+
+"""
+    register_redcap_datadictionary(store::DataStore;
+        domain_id::Int, redcap_url::String, redcap_token::String,
+        dataset_id::Union{Nothing,UUID}=nothing, forms=nothing, vocabulary_prefix::String="") -> DataFrame
+
+Returns a DataFrame mapping REDCap fields to (variable_id, value_type_id, vocabulary_id).
+"""
+function register_redcap_datadictionary(store::DataStore;
+    domain_id::Int, redcap_url::String, redcap_token::String,
+    dataset_id::Union{Nothing,UUID}=nothing, forms=nothing, vocabulary_prefix::String=""
+)::DataFrame
+    md = redcap_metadata(redcap_url, redcap_token; forms=forms)
+    @info "REDCap metadata downloaded: $(nrow(md)) fields"
+    db = store.store
+    out = DataFrame(field_name=String[], variable_id=Int[], value_type_id=Int[],
+        vocabulary_id=Union{Missing,Int}[], field_type=String[],
+        validation=Union{Missing,String}[], label=Union{Missing,String}[], note=Union{Missing,String}[])
+
+    for row in eachrow(md)
+        fname = String(row[:field_name])
+        ftype = String(row[:field_type])
+        fvalid = row[:text_validation_type_or_show_slider_number]
+        flabel = row[:field_label]
+        fnote = row[:field_note]
+        choices = row[:select_choices_or_calculations]
+
+        vtype_id = map_value_type(ftype, fvalid)
+
+        vocab_id = missing
+        if vtype_id == _VT_ENUM
+            # build vocabulary
+            vname = isempty(vocabulary_prefix) ? "dom$(domain_id).$(fname)" : "$(vocabulary_prefix).$(fname)"
+            items = parse_redcap_choices(String(coalesce(choices, "")))
+            vocab_id = ensure_vocabulary!(db, vname, "REDCap choices for $(fname)", items)
+        end
+
+        variable_id = upsert_variable!(db, domain_id, fname;
+            value_type_id=vtype_id,
+            vocabulary_id=isnothing(vocab_id) ? nothing : (ismissing(vocab_id) ? nothing : vocab_id),
+            description=flabel,
+            note=fnote)
+
+        push!(out, (fname, variable_id, vtype_id, vocab_id, ftype, fvalid, flabel))
+    end
+
+    # Optionally link all variables to a dataset schema
+    if dataset_id !== nothing
+        stmt = DBInterface.prepare(
+            db,
+            raw"""
+    INSERT INTO dataset_variables (dataset_id, variable_id)
+    VALUES ($1,$2)
+    ON CONFLICT DO NOTHING;
+"""
+        )
+        for vid in out.variable_id
+            DBInterface.execute(stmt, (dataset_id, vid))
+        end
+    end
+
+    return out
+end

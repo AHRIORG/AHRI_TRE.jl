@@ -16,6 +16,8 @@ using FileIO
 using Base64
 using URIs
 using UUIDs
+using HTTP
+using JSON3
 
 export
     DataStore,
@@ -23,12 +25,13 @@ export
     AbstractStudy, Study, Domain, Entity, EntityRelation,
     opendatastore, closedatastore,
     upsert_study!, upsert_domain!, get_domain, get_study,
-    upsert_entity!, get_entity, upsert_entityrelation!, get_entityrelation,
+    upsert_entity!, get_entity, upsert_entityrelation!, get_entityrelation, list_domainentities, list_domainrelations,
     datasetlakename,
     lookup_variables,
     get_namedkey, get_variable_id, get_variable, get_datasetname, updatevalues, insertdata, insertwithidentity,
     get_table, selectdataframe, prepareselectstatement, dataset_to_dataframe, dataset_to_arrow, dataset_to_csv,
-    dataset_variables, dataset_column, savedataframe, opendatastore, createdatastore
+    dataset_variables, dataset_column, savedataframe, opendatastore, createdatastore,
+    register_redcap_datadictionary
 
 #region Structure
 Base.@kwdef mutable struct DataStore
@@ -244,7 +247,6 @@ function get_domain(store::DataStore, name::AbstractString; uri::Union{Nothing,S
             """
     end
     stmt = DBInterface.prepare(db, sql)
-    @info "Statement query: $(stmt.query)"
     if isnothing(uri)
         df = DBInterface.execute(stmt, (name,)) |> DataFrame
     else
@@ -373,11 +375,11 @@ function get_entity(store::DataStore, domain_id::Int, name::String)::Union{Entit
 end
 
 """
-    get_entityrelation_by_name(store::DataStore, domain_id::Int, name::String)::Union{EntityRelation,Nothing}
+    get_entityrelation!(store::DataStore, domain_id::Int, name::String)::Union{EntityRelation,Nothing}
 
 Return an EntityRelation object by its name in the specified domain.
 """
-function get_entityrelation_by_name(store::DataStore, domain_id::Int, name::String)::Union{EntityRelation,Nothing}
+function get_entityrelation!(store::DataStore, domain_id::Int, name::String)::Union{EntityRelation,Nothing}
     conn = store.store
     sql = raw"""
         SELECT entityrelation_id, entity_id_1, entity_id_2, domain_id, uuid, name,
@@ -403,7 +405,26 @@ function get_entityrelation_by_name(store::DataStore, domain_id::Int, name::Stri
         ontology_class=coalesce(row.ontology_class, missing)
     )
 end
-
+function list_domainentities(store::DataStore, domain_id::Int)::DataFrame
+    conn = store.store
+    sql = raw"""
+        SELECT * FROM entities
+        WHERE domain_id = $1
+        ORDER BY name;
+    """
+    df = DBInterface.execute(DBInterface.prepare(conn, sql), (domain_id,)) |> DataFrame
+    return df
+end
+function list_domainrelations(store::DataStore, domain_id::Int)::DataFrame
+    conn = store.store
+    sql = raw"""
+        SELECT * FROM entityrelations
+        WHERE domain_id = $1
+        ORDER BY name;
+    """
+    df = DBInterface.execute(DBInterface.prepare(conn, sql), (domain_id,)) |> DataFrame
+    return df
+end
 """
     lookup_variables(db, variable_names, domain)
 
@@ -691,5 +712,6 @@ function verify_blake3_digest(path::AbstractString, expected_hex::AbstractString
 end
 include("constants.jl")
 include("tredatabase.jl")
+include("redcap.jl")
 
 end #module

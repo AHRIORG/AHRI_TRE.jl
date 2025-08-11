@@ -25,7 +25,8 @@ do_createstore = false
 do_createstudy = false
 do_updatestudy = false
 do_insertdomain = false
-do_entities = true
+do_entities = false
+do_variables = true
 #endregion
 
 datastore = AHRI_TRE.DataStore(
@@ -55,7 +56,7 @@ try
   end
   if do_updatestudy
     study = Study(
-      study_id= get_study(datastore,"APCC Update"),  # Assuming "APCC Update" exists
+      study_id=get_study(datastore, "APCC Update"),  # Assuming "APCC Update" exists
       name="APCC Update",
       description="Update APCC cohort data and contact information",
       external_id="APCC_Update",
@@ -79,7 +80,7 @@ try
       description="African Population Cohorts Consortium Cohort",
       domain_id=get_domain(datastore, "APCC").domain_id,
       ontology_namespace="apcc",
-      ontology_class = "http://purl.obolibrary.org/obo/NCIT_C61512"
+      ontology_class="http://purl.obolibrary.org/obo/NCIT_C61512"
     )
     entity = upsert_entity!(entity, datastore)
     @info "Entity inserted: $(entity.name) with ID $(entity.entity_id)"
@@ -88,7 +89,7 @@ try
       description="A person that can be contacted at/represent a cohort",
       domain_id=entity.domain_id,
       ontology_namespace="foaf",
-      ontology_class = "http://xmlns.com/foaf/0.1/Person"
+      ontology_class="http://xmlns.com/foaf/0.1/Person"
     )
     entity2 = upsert_entity!(entity2, datastore)
     @info "Entity inserted: $(entity2.name) with ID $(entity2.entity_id)"
@@ -99,10 +100,31 @@ try
       entity_id_1=entity.entity_id,
       entity_id_2=entity2.entity_id,
       ontology_namespace="apcc",
-      ontology_class = "http://purl.obolibrary.org/obo/RO_0000052",
+      ontology_class="http://purl.obolibrary.org/obo/RO_0000052",
     )
     relation = upsert_entityrelation!(relation, datastore)
     @info "Entity relation inserted: $(relation.name) with ID $(relation.entityrelation_id)"
+    # read back the entity
+    entity = get_entity(datastore, get_domain(datastore, "APCC").domain_id, "APCC Cohort")
+    @info "Retrieved entity: $(entity.name) with ID $(entity.entity_id)"
+    entities = list_domainentities(datastore, get_domain(datastore, "APCC").domain_id)
+    entity_names = collect(skipmissing(entities.name))
+    @info "Entities in domain 'APCC': $(join(entity_names, ", "))"
+    relations = list_domainrelations(datastore, get_domain(datastore, "APCC").domain_id)
+    relation_names = collect(skipmissing(relations.name))
+    @info "Relations in domain 'APCC': $(join(relation_names, ", "))"
+  end
+  if do_variables
+    vars_map = register_redcap_datadictionary(datastore;
+      domain_id=get_domain(datastore, "APCC").domain_id,
+      redcap_url=ENV["REDCAP_API_URL"],
+      redcap_token=ENV["REDCAP_API_TOKEN"],
+      dataset_id=nothing,                 # or dataset UUID if you want to fill dataset_variables
+      forms=nothing,                      # or ["enrolment_form","visit_form"]
+      vocabulary_prefix="apcc"
+    )
+
+    @info first(vars_map, 10)
   end
 finally
   closedatastore(datastore)
