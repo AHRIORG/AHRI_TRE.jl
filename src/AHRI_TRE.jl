@@ -18,6 +18,7 @@ using URIs
 using UUIDs
 using HTTP
 using JSON3
+using Downloads
 
 export
     DataStore,
