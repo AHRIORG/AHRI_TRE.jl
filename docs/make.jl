@@ -3,7 +3,7 @@ using AHRI_TRE
 
 makedocs(
     sitename = "AHRI_TRE",
-    format = Documenter.HTML(),
+    format = Documenter.HTML(sidebar_sitename = false),
     modules = [AHRI_TRE],
     pages = [
         "Home" => "index.md",
