@@ -1,19 +1,15 @@
 ## Introduction
 
-This package creates and ingest data for the *Reference Death Archive* into an SQLite or SQL Server database.
+This package creates and ingest data for the *AHRI Trusted Research Environment* into a PostgreSQL and ducklake managed data lake.
 
-Database creation is done using the [`createdatabase`](@ref) function. Set `sqlite=false` to create a SQL Server database.
+Datastore creation is done using the [`createdatastore`](@ref) function.
 
-Data ingestion is specific to a source, where a *source* is an entity that distributes/shares data related to a death, for example, verbal autopsy or assigned cause of death data.
-
-The current version of **RDAIngest.jl** can ingest the *Level 2: De-identified data* distributed by [CHAMPS](https://champshealth.org/data/) and [COMSA](https://comsamozambique.org/data-access).
-
-See the [`ingest_source`](@ref) function.
+Data ingestion is specific to a study, where a *study* is any research study collecting data about entities and the relationships between these entities.
 
 ## Database Structure
 
-The conceptual model of the *Reference Death Archive* is shown in Figure 1.
-![Fig 1: RDA Conceptual Model](RDA_Conceptual_Model.png)
+The conceptual model of the *AHRI_TRE* is shown in Figure 1.
+![Fig 1: RDA Conceptual Model](AHRI-TRE_Conceptual_Model.png)
 
 ### Data sources
 The origin of the data is described in the following tables:

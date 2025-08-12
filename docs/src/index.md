@@ -1,10 +1,10 @@
 ```@meta
-CurrentModule = RDAIngest
+CurrentModule = AHRI_TRE
 ```
 
-# RDAIngest
+# AHRI_TRE
 
-Documentation for [RDAIngest](https://github.com/RDAORG/RDAIngest.jl).
+Documentation for [AHRI_TRE](https://github.com/AHRIORG/AHRI_TRE.jl).
 
 ## Functions
 
@@ -12,5 +12,5 @@ Documentation for [RDAIngest](https://github.com/RDAORG/RDAIngest.jl).
 ```
 
 ```@autodocs
-Modules = [RDAIngest]
+Modules = [AHRI_TRE]
 ```

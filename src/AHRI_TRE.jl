@@ -24,14 +24,14 @@ export
     DataStore,
     Vocabulary, VocabularyItem,
     AbstractStudy, Study, Domain, Entity, EntityRelation,
-    opendatastore, closedatastore,
+    createdatastore, opendatastore, closedatastore,
     upsert_study!, upsert_domain!, get_domain, get_study,
     upsert_entity!, get_entity, upsert_entityrelation!, get_entityrelation, list_domainentities, list_domainrelations,
     datasetlakename,
     lookup_variables,
     get_namedkey, get_variable_id, get_variable, get_datasetname, updatevalues, insertdata, insertwithidentity,
     get_table, selectdataframe, prepareselectstatement, dataset_to_dataframe, dataset_to_arrow, dataset_to_csv,
-    dataset_variables, dataset_column, savedataframe, opendatastore, createdatastore,
+    dataset_variables, dataset_column, savedataframe,
     register_redcap_datadictionary
 
 #region Structure
