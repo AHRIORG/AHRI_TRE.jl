@@ -25,6 +25,31 @@ function redcap_metadata(url::AbstractString, token::AbstractString; forms=nothi
     return DataFrame(JSON3.read(String(resp.body)))
 end
 """
+    _strip_html(text::AbstractString) -> String
+
+Remove HTML tags, script/style blocks, and decode a few common entities. Collapse
+whitespace to single spaces and trim ends. Used to clean REDCap rich-text labels
+before persisting them as variable descriptions.
+"""
+function _strip_html(text::AbstractString)
+    # Remove script and style blocks first (non-greedy, dot matches newlines)
+    cleaned = replace(text, r"<script.*?</script>"s => " ", r"<style.*?</style>"s => " ")
+    # Remove all remaining tags
+    cleaned = replace(cleaned, r"<[^>]+>" => " ")
+    # Decode a minimal set of common HTML entities
+    cleaned = replace(cleaned,
+        "&nbsp;" => " ",
+        "&amp;"  => "&",
+        "&lt;"   => "<",
+        "&gt;"   => ">",
+        "&quot;" => "\"",
+        "&#39;"  => "'")
+    # Collapse whitespace
+    cleaned = replace(cleaned, r"[ \t\r\n]+" => " ")
+    return strip(cleaned)
+end
+
+"""
     parse_redcap_choices(s::AbstractString) -> Vector{NamedTuple{(:value,:code,:description),Tuple{Int,String,Union{String,Missing}}}}
 
 Parses "1, Male | 2, Female" into a vector of items.
@@ -33,32 +58,62 @@ Parses "1, Male | 2, Female" into a vector of items.
 - description: original label
 """
 function parse_redcap_choices(s::AbstractString)
-    isempty(strip(s)) && return NamedTuple{(:value, :code, :description)}[(; value=0, code="", description=missing)][:0]
+    s = strip(s)
+    isempty(s) && return NamedTuple{(:value, :code, :description)}[]
     items = NamedTuple{(:value, :code, :description)}[]
+    next_seq = 1
     for rawitem in split(s, '|')
         part = strip(rawitem)
-        # Split on the first comma only
-        m = match(r"^\s*([^,]+)\s*,\s*(.+)$", part)
-        if m === nothing
-            # Fallback: try '=' form (rare)
-            m2 = match(r"^\s*([^=]+)\s*=\s*(.+)$", part)
-            m2 === nothing && continue
-            idstr = strip(m2.captures[1])
-            label = strip(m2.captures[2])
+        isempty(part) && continue
+        # Support separators: comma or '=' (take first occurrence only)
+        idstr::String = ""
+        label::String = ""
+        if occursin(',', part)
+            m = match(r"^\s*([^,]+?)\s*,\s*(.+)$", part)
+            if m !== nothing
+                idstr = strip(m.captures[1])
+                label = strip(m.captures[2])
+            else
+                idstr = part; label = part
+            end
+        elseif occursin('=', part)
+            m = match(r"^\s*([^=]+?)\s*=\s*(.+)$", part)
+            if m !== nothing
+                idstr = strip(m.captures[1])
+                label = strip(m.captures[2])
+            else
+                idstr = part; label = part
+            end
         else
-            idstr = strip(m.captures[1])
-            label = strip(m.captures[2])
+            # Single token – treat as code with no separate label
+            idstr = part
+            label = part
         end
-        val = try
-            parse(Int, idstr)
+
+        # Try to interpret idstr as integer (direct or float); otherwise assign sequential
+    val::Int = 0
+    parsed_ok = true
+        try
+            val = parse(Int, idstr)
         catch
             try
-                round(Int, parse(Float64, idstr))
+                val = round(Int, parse(Float64, idstr))
             catch
-                error("Non-integer value in choices: $idstr")
+                parsed_ok = false
+                val = next_seq
+                next_seq += 1
             end
         end
-        code = replace(lowercase(label), r"\s+" => "_")
+
+        # Code field rules:
+        #  * If numeric id: derive code from label (lower snake case) like previous logic
+        #  * If non-numeric id: use the original id token (verbatim) as code
+        code::String = if parsed_ok
+            replace(lowercase(label), r"\s+" => "_")
+        else
+            strip(idstr)
+        end
+
         push!(items, (; value=val, code=code, description=label))
     end
     return items
@@ -106,11 +161,12 @@ function ensure_vocabulary!(db, vocab_name::String, description::String, items)
     q_get = DBInterface.prepare(
         db,
         raw"""
-    SELECT vocabulary_id FROM vocabularies WHERE name = $1 LIMIT 1;
-"""
+            SELECT vocabulary_id FROM vocabularies WHERE name = $1 LIMIT 1;
+        """
     )
     df = DBInterface.execute(q_get, (vocab_name,)) |> DataFrame
-    vocab_id::Int
+    # Initialize to sentinel; we'll always assign in one of the branches
+    vocab_id = -1
     if nrow(df) == 0
         vocab_id = insertwithidentity(db, "vocabularies",
             ["name", "description"], (vocab_name, description))
@@ -126,9 +182,9 @@ function ensure_vocabulary!(db, vocab_name::String, description::String, items)
     ins = DBInterface.prepare(
         db,
         raw"""
-    INSERT INTO vocabulary_items (vocabulary_id, value, code, description)
-    VALUES ($1,$2,$3,$4);
-"""
+            INSERT INTO vocabulary_items (vocabulary_id, value, code, description)
+            VALUES ($1,$2,$3,$4);
+        """
     )
     for it in items
         DBInterface.execute(ins, (vocab_id, it.value, it.code, it.description))
@@ -141,20 +197,29 @@ end
 
 Upserts into variables on (domain_id, name). Returns variable_id.
 """
-function upsert_variable!(db, domain_id::Int, name::String; value_type_id::Int, vocabulary_id::Union{Nothing,Int}=nothing, description=missing, note=missing)
-    df = DBInterface.execute(DBInterface.prepare(
-            db,
-            raw"""
-    INSERT INTO variables (domain_id, name, value_type_id, vocabulary_id, description, note)
-    VALUES ($1,$2,$3,$4,$5,$6)
-    ON CONFLICT (domain_id, name) DO UPDATE
-       SET value_type_id = EXCLUDED.value_type_id,
-           vocabulary_id = EXCLUDED.vocabulary_id,
-           description   = EXCLUDED.description,
-           note          = EXCLUDED.note
-    RETURNING variable_id;
-"""
-        ), (domain_id, name, value_type_id, vocabulary_id, description, note)) |> DataFrame
+function upsert_variable!(db, domain_id::Int, name::String; value_type_id::Int, vocabulary_id::Union{Nothing,Int,Missing,String}=nothing, description=missing, note=missing)
+    # Normalize optional / nullable parameters to proper SQL NULLs for LibPQ
+    if vocabulary_id isa String && lowercase(vocabulary_id) == "nothing"
+        vocabulary_id = missing
+    end
+    vid  = (vocabulary_id === nothing || vocabulary_id === missing) ? missing : vocabulary_id
+    desc = (description === nothing || description === missing) ? missing : description
+    nte  = (note === nothing || note === missing) ? missing : note
+
+    stmt = DBInterface.prepare(
+        db,
+        raw"""
+            INSERT INTO variables (domain_id, name, value_type_id, vocabulary_id, description, note)
+            VALUES ($1,$2,$3,$4,$5,$6)
+            ON CONFLICT (domain_id, name) DO UPDATE
+            SET value_type_id = EXCLUDED.value_type_id,
+                vocabulary_id = EXCLUDED.vocabulary_id,
+                description   = EXCLUDED.description,
+                note          = EXCLUDED.note
+            RETURNING variable_id;
+        """
+    )
+    df = DBInterface.execute(stmt, (domain_id, name, value_type_id, vid, desc, nte)) |> DataFrame
     return df[1, :variable_id]
 end
 
@@ -164,59 +229,75 @@ end
         dataset_id::Union{Nothing,UUID}=nothing, forms=nothing, vocabulary_prefix::String="") -> DataFrame
 
 Returns a DataFrame mapping REDCap fields to (variable_id, value_type_id, vocabulary_id).
+Field types: "descriptive","sql","signature","file" are ignored.
+This function downloads the REDCap metadata, processes it, and registers variables in the given DataStore.
+    Database actions are wrapped in a transaction and rolled back on error.
 """
 function register_redcap_datadictionary(store::DataStore;
     domain_id::Int, redcap_url::String, redcap_token::String,
-    dataset_id::Union{Nothing,UUID}=nothing, forms=nothing, vocabulary_prefix::String=""
-)::DataFrame
-    md = redcap_metadata(redcap_url, redcap_token; forms=forms)
-    @info "REDCap metadata downloaded: $(nrow(md)) fields"
+    dataset_id::Union{Nothing,UUID}=nothing, forms=nothing, vocabulary_prefix::String="")::DataFrame
     db = store.store
-    out = DataFrame(field_name=String[], variable_id=Int[], value_type_id=Int[],
-        vocabulary_id=Union{Missing,Int}[], field_type=String[],
-        validation=Union{Missing,String}[], label=Union{Missing,String}[], note=Union{Missing,String}[])
+    DBInterface.execute(db, "BEGIN;")
+    try
+        md = redcap_metadata(redcap_url, redcap_token; forms=forms)
+        @info "REDCap metadata downloaded: $(nrow(md)) fields"
+        out = DataFrame(field_name=String[], variable_id=Int[], value_type_id=Int[],
+            vocabulary_id=Union{Missing,Int}[], field_type=String[],
+            validation=Union{Missing,String}[], label=Union{Missing,String}[], note=Union{Missing,String}[])
 
-    for row in eachrow(md)
-        fname = String(row[:field_name])
-        ftype = String(row[:field_type])
-        fvalid = row[:text_validation_type_or_show_slider_number]
-        flabel = row[:field_label]
-        fnote = row[:field_note]
-        choices = row[:select_choices_or_calculations]
+        for row in eachrow(md)
+            fname = String(row[:field_name])
+            ftype = String(row[:field_type])
+            fvalid = row[:text_validation_type_or_show_slider_number]
+            raw_label = row[:field_label]
+            flabel = _strip_html(raw_label)
+            fnote = row[:field_note]
+            choices = row[:select_choices_or_calculations]
 
-        vtype_id = map_value_type(ftype, fvalid)
+            # Skip non-data fields
+            if lowercase(ftype) in ["descriptive","sql","signature","file"]
+                continue
+            end
 
-        vocab_id = missing
-        if vtype_id == _VT_ENUM
-            # build vocabulary
-            vname = isempty(vocabulary_prefix) ? "dom$(domain_id).$(fname)" : "$(vocabulary_prefix).$(fname)"
-            items = parse_redcap_choices(String(coalesce(choices, "")))
-            vocab_id = ensure_vocabulary!(db, vname, "REDCap choices for $(fname)", items)
+            vtype_id = map_value_type(ftype, fvalid)
+
+            vocab_id = missing
+            if vtype_id == _VT_ENUM
+                vname = isempty(vocabulary_prefix) ? "dom$(domain_id).$(fname)" : "$(vocabulary_prefix).$(fname)"
+                items = parse_redcap_choices(String(coalesce(choices, "")))
+                vocab_id = ensure_vocabulary!(db, vname, "REDCap choices for $(fname)", items)
+            end
+
+            vocab_arg = (vocab_id === missing) ? missing : Int64(vocab_id)
+            variable_id = upsert_variable!(db, domain_id, fname;
+                value_type_id=vtype_id,
+                vocabulary_id=vocab_arg,
+                description=flabel,
+                note=fnote)
+
+            push!(out, (fname, variable_id, vtype_id, vocab_id, ftype, fvalid, flabel, fnote))
         end
 
-        variable_id = upsert_variable!(db, domain_id, fname;
-            value_type_id=vtype_id,
-            vocabulary_id=isnothing(vocab_id) ? nothing : (ismissing(vocab_id) ? nothing : vocab_id),
-            description=flabel,
-            note=fnote)
-
-        push!(out, (fname, variable_id, vtype_id, vocab_id, ftype, fvalid, flabel))
-    end
-
-    # Optionally link all variables to a dataset schema
-    if dataset_id !== nothing
-        stmt = DBInterface.prepare(
-            db,
-            raw"""
-    INSERT INTO dataset_variables (dataset_id, variable_id)
-    VALUES ($1,$2)
-    ON CONFLICT DO NOTHING;
-"""
-        )
-        for vid in out.variable_id
-            DBInterface.execute(stmt, (dataset_id, vid))
+        if dataset_id !== nothing && !isempty(out.variable_id)
+            stmt = DBInterface.prepare(
+                db,
+                raw"""
+                INSERT INTO dataset_variables (dataset_id, variable_id)
+                VALUES ($1,$2)
+                ON CONFLICT DO NOTHING;
+            """
+            )
+            for vid in out.variable_id
+                DBInterface.execute(stmt, (dataset_id, vid))
+            end
         end
-    end
 
-    return out
+        DBInterface.execute(db, "COMMIT;")
+        return out
+    catch e
+        try
+            DBInterface.execute(db, "ROLLBACK;")
+        catch end
+        rethrow(e)
+    end
 end

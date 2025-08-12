@@ -11,7 +11,7 @@ using Dates
 dotenv()
 
 #region Setup Logging
-logger = FormatLogger(open("logs/entities.log", "w")) do io, args
+logger = FormatLogger(open("logs/variables.log", "w")) do io, args
   # Write the module, level and message only
   println(io, args._module, " | ", "[", args.level, "] ", args.message)
 end
