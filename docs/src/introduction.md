@@ -9,7 +9,7 @@ Data ingestion is specific to a study, where a *study* is any research study col
 ## Database Structure
 
 The conceptual model of the *AHRI_TRE* is shown in Figure 1.
-![Fig 1: RDA Conceptual Model](AHRI-TRE_Conceptual_Model.png)
+![Fig 1: AHRI-TRE Conceptual Model](assets/AHRI-TRE_Conceptual_Model.png)
 
 ### Data sources
 The origin of the data is described in the following tables:

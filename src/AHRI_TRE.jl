@@ -138,6 +138,13 @@ function createdatastore(store::DataStore; superuser::String="postgres", superpw
     end
 end
 
+"""
+    upsert_study!(study::Study, store::DataStore)::Study
+
+Create or update a study record. If a study with the same name already exists, it updates and returns the study.
+Otherwise, it inserts a new row and returns the new study.
+If `study.study_id` is `nothing`, it inserts a new study and lets PostgreSQL assign
+"""
 function upsert_study!(study::Study, store::DataStore)::Study
     db = store.store
     if study.study_id === nothing

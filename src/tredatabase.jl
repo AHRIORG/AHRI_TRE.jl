@@ -110,7 +110,7 @@ end
 """
     makeparam(s)
 
-Return a parameterized string for SQL queries, e.g., "\$1" for PostgreSQL
+Return a parameterized string for SQL queries
 """
 makeparams(n) = ["\$" * string(i) for i in 1:n]  # e.g. ["$1","$2",...]
 """
@@ -268,7 +268,7 @@ end
 """
     initstudytypes()
 
-Default transformation types
+Default study types
 """
 initstudytypes() = """
     -- Insert the values
