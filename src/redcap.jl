@@ -161,8 +161,8 @@ function ensure_vocabulary!(db, vocab_name::String, description::String, items)
     q_get = DBInterface.prepare(
         db,
         raw"""
-    SELECT vocabulary_id FROM vocabularies WHERE name = $1 LIMIT 1;
-"""
+            SELECT vocabulary_id FROM vocabularies WHERE name = $1 LIMIT 1;
+        """
     )
     df = DBInterface.execute(q_get, (vocab_name,)) |> DataFrame
     # Initialize to sentinel; we'll always assign in one of the branches
@@ -182,9 +182,9 @@ function ensure_vocabulary!(db, vocab_name::String, description::String, items)
     ins = DBInterface.prepare(
         db,
         raw"""
-    INSERT INTO vocabulary_items (vocabulary_id, value, code, description)
-    VALUES ($1,$2,$3,$4);
-"""
+            INSERT INTO vocabulary_items (vocabulary_id, value, code, description)
+            VALUES ($1,$2,$3,$4);
+        """
     )
     for it in items
         DBInterface.execute(ins, (vocab_id, it.value, it.code, it.description))
@@ -209,15 +209,15 @@ function upsert_variable!(db, domain_id::Int, name::String; value_type_id::Int, 
     stmt = DBInterface.prepare(
         db,
         raw"""
-    INSERT INTO variables (domain_id, name, value_type_id, vocabulary_id, description, note)
-    VALUES ($1,$2,$3,$4,$5,$6)
-    ON CONFLICT (domain_id, name) DO UPDATE
-       SET value_type_id = EXCLUDED.value_type_id,
-           vocabulary_id = EXCLUDED.vocabulary_id,
-           description   = EXCLUDED.description,
-           note          = EXCLUDED.note
-    RETURNING variable_id;
-"""
+            INSERT INTO variables (domain_id, name, value_type_id, vocabulary_id, description, note)
+            VALUES ($1,$2,$3,$4,$5,$6)
+            ON CONFLICT (domain_id, name) DO UPDATE
+            SET value_type_id = EXCLUDED.value_type_id,
+                vocabulary_id = EXCLUDED.vocabulary_id,
+                description   = EXCLUDED.description,
+                note          = EXCLUDED.note
+            RETURNING variable_id;
+        """
     )
     df = DBInterface.execute(stmt, (domain_id, name, value_type_id, vid, desc, nte)) |> DataFrame
     return df[1, :variable_id]
@@ -230,67 +230,74 @@ end
 
 Returns a DataFrame mapping REDCap fields to (variable_id, value_type_id, vocabulary_id).
 Field types: "descriptive","sql","signature","file" are ignored.
+This function downloads the REDCap metadata, processes it, and registers variables in the given DataStore.
+    Database actions are wrapped in a transaction and rolled back on error.
 """
 function register_redcap_datadictionary(store::DataStore;
     domain_id::Int, redcap_url::String, redcap_token::String,
-    dataset_id::Union{Nothing,UUID}=nothing, forms=nothing, vocabulary_prefix::String=""
-)::DataFrame
-    md = redcap_metadata(redcap_url, redcap_token; forms=forms)
-    @info "REDCap metadata downloaded: $(nrow(md)) fields"
+    dataset_id::Union{Nothing,UUID}=nothing, forms=nothing, vocabulary_prefix::String="")::DataFrame
     db = store.store
-    out = DataFrame(field_name=String[], variable_id=Int[], value_type_id=Int[],
-        vocabulary_id=Union{Missing,Int}[], field_type=String[],
-        validation=Union{Missing,String}[], label=Union{Missing,String}[], note=Union{Missing,String}[])
+    DBInterface.execute(db, "BEGIN;")
+    try
+        md = redcap_metadata(redcap_url, redcap_token; forms=forms)
+        @info "REDCap metadata downloaded: $(nrow(md)) fields"
+        out = DataFrame(field_name=String[], variable_id=Int[], value_type_id=Int[],
+            vocabulary_id=Union{Missing,Int}[], field_type=String[],
+            validation=Union{Missing,String}[], label=Union{Missing,String}[], note=Union{Missing,String}[])
 
-    for row in eachrow(md)
-        fname = String(row[:field_name])
-        ftype = String(row[:field_type])
-        fvalid = row[:text_validation_type_or_show_slider_number]
-        raw_label = row[:field_label]
-        flabel = _strip_html(raw_label)
-        fnote = row[:field_note]
-        choices = row[:select_choices_or_calculations]
+        for row in eachrow(md)
+            fname = String(row[:field_name])
+            ftype = String(row[:field_type])
+            fvalid = row[:text_validation_type_or_show_slider_number]
+            raw_label = row[:field_label]
+            flabel = _strip_html(raw_label)
+            fnote = row[:field_note]
+            choices = row[:select_choices_or_calculations]
 
-        # Skip purely descriptive fields (no data captured)
-        if lowercase(ftype) in ["descriptive","sql","signature","file"]
-            continue
+            # Skip non-data fields
+            if lowercase(ftype) in ["descriptive","sql","signature","file"]
+                continue
+            end
+
+            vtype_id = map_value_type(ftype, fvalid)
+
+            vocab_id = missing
+            if vtype_id == _VT_ENUM
+                vname = isempty(vocabulary_prefix) ? "dom$(domain_id).$(fname)" : "$(vocabulary_prefix).$(fname)"
+                items = parse_redcap_choices(String(coalesce(choices, "")))
+                vocab_id = ensure_vocabulary!(db, vname, "REDCap choices for $(fname)", items)
+            end
+
+            vocab_arg = (vocab_id === missing) ? missing : Int64(vocab_id)
+            variable_id = upsert_variable!(db, domain_id, fname;
+                value_type_id=vtype_id,
+                vocabulary_id=vocab_arg,
+                description=flabel,
+                note=fnote)
+
+            push!(out, (fname, variable_id, vtype_id, vocab_id, ftype, fvalid, flabel, fnote))
         end
 
-        vtype_id = map_value_type(ftype, fvalid)
-
-        vocab_id = missing
-        if vtype_id == _VT_ENUM
-            # build vocabulary
-            vname = isempty(vocabulary_prefix) ? "dom$(domain_id).$(fname)" : "$(vocabulary_prefix).$(fname)"
-            items = parse_redcap_choices(String(coalesce(choices, "")))
-            vocab_id = ensure_vocabulary!(db, vname, "REDCap choices for $(fname)", items)
+        if dataset_id !== nothing && !isempty(out.variable_id)
+            stmt = DBInterface.prepare(
+                db,
+                raw"""
+                INSERT INTO dataset_variables (dataset_id, variable_id)
+                VALUES ($1,$2)
+                ON CONFLICT DO NOTHING;
+            """
+            )
+            for vid in out.variable_id
+                DBInterface.execute(stmt, (dataset_id, vid))
+            end
         end
 
-    # Use missing (not nothing) so LibPQ sends proper NULL; earlier use of nothing produced string 'nothing' in SQL
-    vocab_arg = (vocab_id === missing) ? missing : Int64(vocab_id)
-        variable_id = upsert_variable!(db, domain_id, fname;
-            value_type_id=vtype_id,
-            vocabulary_id=vocab_arg,
-            description=flabel,
-            note=fnote)
-
-    push!(out, (fname, variable_id, vtype_id, vocab_id, ftype, fvalid, flabel, fnote))
+        DBInterface.execute(db, "COMMIT;")
+        return out
+    catch e
+        try
+            DBInterface.execute(db, "ROLLBACK;")
+        catch end
+        rethrow(e)
     end
-
-    # Optionally link all variables to a dataset schema
-    if dataset_id !== nothing
-        stmt = DBInterface.prepare(
-            db,
-            raw"""
-    INSERT INTO dataset_variables (dataset_id, variable_id)
-    VALUES ($1,$2)
-    ON CONFLICT DO NOTHING;
-"""
-        )
-        for vid in out.variable_id
-            DBInterface.execute(stmt, (dataset_id, vid))
-        end
-    end
-
-    return out
 end
