@@ -37,8 +37,9 @@ function download_redcap_records(api_url, api_token, lake_root)::String
         "content"                => "record",
         "action"                 => "export",
         "format"                 => "json",
-        "type"                   => "flat",
-        "csvDelimiter"           => "",
+        "type"                   => "eav",
+        "fields"=> "arrray(record_id,cs_cohort_name,cs_coh_countries)",  # Empty string means all fields
+        "csvDelimiter"           => ",",
         "rawOrLabel"             => "raw",
         "rawOrLabelHeaders"      => "raw",
         "exportCheckboxLabel"    => "false",
@@ -66,9 +67,40 @@ function download_redcap_records(api_url, api_token, lake_root)::String
     return outpath
 end
 
-# Example usage:
-path = download_redcap_records(api_url, api_token, lake_root)
+function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; fields::Vector{String}=String[],lake_root = ENV["TRE_LAKE_PATH"])
+
+    f = isempty(fields) ? redcap_fields(api_url, api_token) : fields
+    form = Dict(
+        "token"   => api_token,
+        "content" => "record",
+        "action"  => "export",
+        "format"  => "json",
+        "type"    => "eav",
+        "fields"  => join(f, ","),
+        "returnFormat" => "json",
+    )
+    body = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k,v) in form], "&")
+    resp = HTTP.post(api_url; headers=["Content-Type"=>"application/x-www-form-urlencoded"], body=body)
+    resp.status == 200 || error("EAV export failed: $(resp.status) $(String(resp.body))")
+    # Ensure output directory exists: <TRE_LAKE_PATH>/ingests
+    out_dir = joinpath(lake_root, "ingests")
+    mkpath(out_dir)
+
+    # Choose a random unique filename (JSON, since format=json)
+    fname   = string("redcap_records_", Dates.format(now(), "yyyymmdd_HHMMSS"), "_", uuid4(), ".json")
+    outpath = joinpath(out_dir, fname)
+
+    # Save to file
+    open(outpath, "w") do io
+        write(io, resp.body)
+    end
+
+    return outpath
+end
+path = redcap_export_eav(api_url, api_token, fields=["record_id", "cs_cohort_name", "cs_coh_countries"], lake_root=lake_root)
 println("Saved REDCap export to: $path")
+# Example usage:
+#=
 
 open(path, "r") do io
     json_data = JSON3.read(io)              # Array of JSON3.Object
@@ -77,3 +109,4 @@ open(path, "r") do io
     @info "Loaded $(nrow(df)) rows x $(ncol(df)) cols"
     println(first(df, 5))
 end
+=#
