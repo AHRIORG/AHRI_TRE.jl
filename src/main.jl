@@ -35,7 +35,8 @@ datastore = AHRI_TRE.DataStore(
   password=ENV["TRE_PWD"],
   dbname=ENV["TRE_DBNAME"],
   lake_password=ENV["LAKE_PASSWORD"],
-  lake_user=ENV["LAKE_USER"]
+  lake_user=ENV["LAKE_USER"],
+  lake_data=ENV["TRE_LAKE_PATH"]
 )
 if do_createstore
   AHRI_TRE.createdatastore(datastore; superuser=ENV["SUPER_USER"], superpwd=ENV["SUPER_PWD"])

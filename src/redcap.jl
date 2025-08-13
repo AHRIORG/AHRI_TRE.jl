@@ -301,3 +301,38 @@ function register_redcap_datadictionary(store::DataStore;
         rethrow(e)
     end
 end
+"""
+    redcap_project_info(url, token; raw=false) -> NamedTuple | JSON3.Object
+
+Fetch high-level REDCap project information (title, purpose, status, etc.).
+When `raw=true`, return the parsed JSON3.Object directly.
+When `raw=false` (default), return a `NamedTuple` with symbol keys suitable for
+constructing a DataFrame or logging.
+"""
+function redcap_project_info(url::AbstractString, token::AbstractString; raw::Bool=false)
+    body = Dict(
+        "token" => token,
+        "content" => "project",
+        "format" => "json",
+        "returnFormat" => "json"
+    )
+    headers = ["Content-Type" => "application/x-www-form-urlencoded"]
+    form = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k,v) in body], "&")
+    resp = HTTP.post(url, headers, form)
+    resp.status == 200 || error("REDCap project info error $(resp.status): $(String(resp.body))")
+    obj = JSON3.read(String(resp.body))  # single JSON object
+    raw && return obj
+    # Convert keys to symbols & values to plain Julia types where reasonable
+    nt_pairs = NamedTuple{Tuple(Symbol.(keys(obj)))}(Tuple(values(obj)))
+    return nt_pairs
+end
+
+"""
+    redcap_project_info_df(url, token) -> DataFrame
+
+Convenience wrapper returning a single-row DataFrame with project metadata.
+"""
+function redcap_project_info_df(url::AbstractString, token::AbstractString)::DataFrame
+    info = redcap_project_info(url, token; raw=false)
+    return DataFrame([info])
+end

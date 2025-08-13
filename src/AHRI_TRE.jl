@@ -37,7 +37,7 @@ export
 #region Structure
 Base.@kwdef mutable struct DataStore
     server::String = "localhost"
-    user::String = "root"
+    user::String = "postgres"
     password::String = ""
     dbname::String = "AHRI_TRE"
     lake_data::String = "/data/datalake" # Path to DuckDB data lake
