@@ -39,11 +39,11 @@ function _strip_html(text::AbstractString)
     # Decode a minimal set of common HTML entities
     cleaned = replace(cleaned,
         "&nbsp;" => " ",
-        "&amp;"  => "&",
-        "&lt;"   => "<",
-        "&gt;"   => ">",
+        "&amp;" => "&",
+        "&lt;" => "<",
+        "&gt;" => ">",
         "&quot;" => "\"",
-        "&#39;"  => "'")
+        "&#39;" => "'")
     # Collapse whitespace
     cleaned = replace(cleaned, r"[ \t\r\n]+" => " ")
     return strip(cleaned)
@@ -74,7 +74,8 @@ function parse_redcap_choices(s::AbstractString)
                 idstr = strip(m.captures[1])
                 label = strip(m.captures[2])
             else
-                idstr = part; label = part
+                idstr = part
+                label = part
             end
         elseif occursin('=', part)
             m = match(r"^\s*([^=]+?)\s*=\s*(.+)$", part)
@@ -82,7 +83,8 @@ function parse_redcap_choices(s::AbstractString)
                 idstr = strip(m.captures[1])
                 label = strip(m.captures[2])
             else
-                idstr = part; label = part
+                idstr = part
+                label = part
             end
         else
             # Single token – treat as code with no separate label
@@ -91,8 +93,8 @@ function parse_redcap_choices(s::AbstractString)
         end
 
         # Try to interpret idstr as integer (direct or float); otherwise assign sequential
-    val::Int = 0
-    parsed_ok = true
+        val::Int = 0
+        parsed_ok = true
         try
             val = parse(Int, idstr)
         catch
@@ -199,29 +201,30 @@ end
 
 Upserts into variables on (domain_id, name). Returns variable_id.
 """
-function upsert_variable!(db, domain_id::Int, name::String; value_type_id::Int, vocabulary_id::Union{Nothing,Int,Missing,String}=nothing, description=missing, note=missing)
+function upsert_variable!(db, domain_id::Int, name::String; value_type_id::Int, vocabulary_id::Union{Nothing,Int,Missing,String}=nothing, description=missing, note=missing, keyrole::String="none")
     # Normalize optional / nullable parameters to proper SQL NULLs for LibPQ
     if vocabulary_id isa String && lowercase(vocabulary_id) == "nothing"
         vocabulary_id = missing
     end
-    vid  = (vocabulary_id === nothing || vocabulary_id === missing) ? missing : vocabulary_id
+    vid = (vocabulary_id === nothing || vocabulary_id === missing) ? missing : vocabulary_id
     desc = (description === nothing || description === missing) ? missing : description
-    nte  = (note === nothing || note === missing) ? missing : note
+    nte = (note === nothing || note === missing) ? missing : note
 
     stmt = DBInterface.prepare(
         db,
         raw"""
-            INSERT INTO variables (domain_id, name, value_type_id, vocabulary_id, description, note)
-            VALUES ($1,$2,$3,$4,$5,$6)
+            INSERT INTO variables (domain_id, name, value_type_id, vocabulary_id, description, note, keyrole)
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
             ON CONFLICT (domain_id, name) DO UPDATE
             SET value_type_id = EXCLUDED.value_type_id,
                 vocabulary_id = EXCLUDED.vocabulary_id,
                 description   = EXCLUDED.description,
-                note          = EXCLUDED.note
+                note          = EXCLUDED.note,
+                keyrole       = EXCLUDED.keyrole
             RETURNING variable_id;
         """
     )
-    df = DBInterface.execute(stmt, (domain_id, name, value_type_id, vid, desc, nte)) |> DataFrame
+    df = DBInterface.execute(stmt, (domain_id, name, value_type_id, vid, desc, nte, keyrole)) |> DataFrame
     return df[1, :variable_id]
 end
 
@@ -246,7 +249,7 @@ function register_redcap_datadictionary(store::DataStore;
         out = DataFrame(field_name=String[], variable_id=Int[], value_type_id=Int[],
             vocabulary_id=Union{Missing,Int}[], field_type=String[],
             validation=Union{Missing,String}[], label=Union{Missing,String}[], note=Union{Missing,String}[])
-
+        first_row = true
         for row in eachrow(md)
             fname = String(row[:field_name])
             ftype = String(row[:field_type])
@@ -257,14 +260,14 @@ function register_redcap_datadictionary(store::DataStore;
             choices = row[:select_choices_or_calculations]
 
             # Skip non-data fields
-            if lowercase(ftype) in ["descriptive","sql","signature","file"]
+            if lowercase(ftype) in ["descriptive", "sql", "signature", "file"]
                 continue
             end
 
             vtype_id = map_value_type(ftype, fvalid)
 
             vocab_id = missing
-            if vtype_id == _VT_ENUM
+            if vtype_id == _VT_ENUM || vtype_id == _VT_MULTIRESPONSE
                 vname = isempty(vocabulary_prefix) ? "dom$(domain_id).$(fname)" : "$(vocabulary_prefix).$(fname)"
                 items = parse_redcap_choices(String(coalesce(choices, "")))
                 vocab_id = ensure_vocabulary!(db, vname, "REDCap choices for $(fname)", items)
@@ -275,8 +278,9 @@ function register_redcap_datadictionary(store::DataStore;
                 value_type_id=vtype_id,
                 vocabulary_id=vocab_arg,
                 description=flabel,
-                note=fnote)
-
+                note=fnote,
+                keyrole=first_row ? "record" : "none")
+            first_row = false
             push!(out, (fname, variable_id, vtype_id, vocab_id, ftype, fvalid, flabel, fnote))
         end
 
@@ -299,7 +303,8 @@ function register_redcap_datadictionary(store::DataStore;
     catch e
         try
             DBInterface.execute(db, "ROLLBACK;")
-        catch end
+        catch
+        end
         rethrow(e)
     end
 end
@@ -319,7 +324,7 @@ function redcap_project_info(url::AbstractString, token::AbstractString; raw::Bo
         "returnFormat" => "json"
     )
     headers = ["Content-Type" => "application/x-www-form-urlencoded"]
-    form = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k,v) in body], "&")
+    form = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k, v) in body], "&")
     resp = HTTP.post(url, headers, form)
     resp.status == 200 || error("REDCap project info error $(resp.status): $(String(resp.body))")
     obj = JSON3.read(String(resp.body))  # single JSON object
