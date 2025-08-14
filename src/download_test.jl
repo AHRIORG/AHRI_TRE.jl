@@ -6,6 +6,7 @@ using UUIDs
 using Dates
 using DataFrames
 using DuckDB
+using StringEncodings
 
 dotenv()
 # Read required environment variables
@@ -67,14 +68,15 @@ function download_redcap_records(api_url, api_token, lake_root)::String
     return outpath
 end
 
-function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; fields::Vector{String}=String[],lake_root = ENV["TRE_LAKE_PATH"])
+function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; fields::Vector{String}=String[],lake_root = ENV["TRE_LAKE_PATH"], decode::Bool=false)::String
 
     f = isempty(fields) ? redcap_fields(api_url, api_token) : fields
+    println(f)
     form = Dict(
         "token"   => api_token,
         "content" => "record",
         "action"  => "export",
-        "format"  => "json",
+        "format"  => "csv",
         "type"    => "eav",
         "fields"  => join(f, ","),
         "returnFormat" => "json",
@@ -87,12 +89,17 @@ function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; f
     mkpath(out_dir)
 
     # Choose a random unique filename (JSON, since format=json)
-    fname   = string("redcap_records_", Dates.format(now(), "yyyymmdd_HHMMSS"), "_", uuid4(), ".json")
+    fname   = string("redcap_records_", Dates.format(now(), "yyyymmdd_HHMMSS"), "_", uuid4(), ".csv")
     outpath = joinpath(out_dir, fname)
 
     # Save to file
     open(outpath, "w") do io
-        write(io, resp.body)
+        if !decode
+            write(io, resp.body)  # Write raw bytes directly
+            return outpath
+        end
+        s = StringEncodings.decode(resp.body, "ISO-8859-2") 
+        write(io, s)  # Convert to UTF-8
     end
 
     return outpath
@@ -132,7 +139,7 @@ function redcap_fields(api_url::AbstractString, api_token::AbstractString;
     return unique(names)
 end
 
-path = redcap_export_eav(api_url, api_token, fields=String[], lake_root=lake_root)
+path = redcap_export_eav(api_url, api_token, fields=String[], lake_root=lake_root, decode=true)
 println("Saved REDCap export to: $path")
 # Example usage:
 #=
