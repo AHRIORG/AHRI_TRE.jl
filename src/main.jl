@@ -11,7 +11,7 @@ using Dates
 dotenv()
 
 #region Setup Logging
-logger = FormatLogger(open("logs/variables.log", "w")) do io, args
+logger = FormatLogger(open("logs/new_store.log", "w")) do io, args
   # Write the module, level and message only
   println(io, args._module, " | ", "[", args.level, "] ", args.message)
 end
@@ -21,11 +21,11 @@ old_logger = global_logger(minlogger)
 start_time = Dates.now()
 
 #region Execution flags
-do_createstore = false
-do_createstudy = false
-do_updatestudy = false
-do_insertdomain = false
-do_entities = false
+do_createstore = true
+do_createstudy = true
+do_updatestudy = true
+do_insertdomain = true
+do_entities = true
 do_variables = true
 #endregion
 
