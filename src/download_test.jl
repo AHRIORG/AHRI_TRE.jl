@@ -97,7 +97,42 @@ function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; f
 
     return outpath
 end
-path = redcap_export_eav(api_url, api_token, fields=["record_id", "cs_cohort_name", "cs_coh_countries"], lake_root=lake_root)
+
+function redcap_fields(api_url::AbstractString, api_token::AbstractString;
+    forms::Union{Nothing,Vector{String}}=nothing,
+    include_nondata::Bool=false)::Vector{String}
+    # Build request for REDCap metadata
+    body = Dict(
+        "token" => api_token,
+        "content" => "metadata",
+        "format" => "json",
+        "returnFormat" => "json",
+    )
+    if forms !== nothing
+        for (i, f) in enumerate(forms)
+            body["forms[$(i-1)]"] = f
+        end
+    end
+    form = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k,v) in body], "&")
+    resp = HTTP.post(api_url; headers=["Content-Type"=>"application/x-www-form-urlencoded", "Accept"=>"application/json"], body=form)
+    resp.status == 200 || error("REDCap metadata request failed $(resp.status): $(String(resp.body))")
+
+    md = JSON3.read(String(resp.body))  # array of objects
+    nondata = Set(["descriptive","file","sql","signature"])  # commonly non-data fields
+    names = String[]
+    for obj in md
+        nt = NamedTuple(obj)
+        fname = hasproperty(nt, :field_name) ? String(getfield(nt, :field_name)) : ""
+        isempty(fname) && continue
+        ftype = hasproperty(nt, :field_type) ? lowercase(String(getfield(nt, :field_type))) : ""
+        if include_nondata || !(ftype in nondata)
+            push!(names, fname)
+        end
+    end
+    return unique(names)
+end
+
+path = redcap_export_eav(api_url, api_token, fields=String[], lake_root=lake_root)
 println("Saved REDCap export to: $path")
 # Example usage:
 #=
