@@ -471,7 +471,8 @@ initvalue_types() = DataFrame([(value_type_id=TRE_TYPE_INTEGER, value_type="xsd:
     (value_type_id=TRE_TYPE_DATE, value_type="xsd:date", description="ISO Date yyyy-mm-dd"),
     (value_type_id=TRE_TYPE_DATETIME, value_type="xsd:dateTime", description="ISO Datetime yyyy-mm-ddTHH:mm:ss.sss"),
     (value_type_id=TRE_TYPE_TIME, value_type="xsd:time", description="ISO Time HH:mm:ss.sss"),
-    (value_type_id=TRE_TYPE_CATEGORY, value_type="enumeration", description="Category represented by a Vocabulary with integer value and string code, stored as Integer")
+    (value_type_id=TRE_TYPE_CATEGORY, value_type="enumeration", description="Category represented by a Vocabulary with integer value and string code, stored as Integer"),
+    (value_type_id=TRE_TYPE_MULTIRESPONSE, value_type="multiresponse", description="Multi-response enumeration with multiple values, stored as an array of integers")
 ])
 
 """

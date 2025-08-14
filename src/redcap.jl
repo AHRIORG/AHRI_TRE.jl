@@ -126,8 +126,10 @@ REDCap field_type and validation -> TRE value_type_id.
 function map_value_type(field_type::AbstractString, validation::Union{Missing,AbstractString})
     ft = lowercase(String(field_type))
     v = validation === missing ? "" : lowercase(String(validation))
-    if ft in ("radio", "dropdown", "checkbox", "yesno", "truefalse")
+    if ft in ("radio", "dropdown", "yesno", "truefalse")
         return _VT_ENUM
+    elseif ft == "checkbox"
+        return _VT_MULTIRESPONSE
     elseif ft == "calc"
         # often numeric; you may refine with validation
         return _VT_FLOAT
