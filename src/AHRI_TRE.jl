@@ -19,6 +19,8 @@ using UUIDs
 using HTTP
 using JSON3
 using Downloads
+using StringEncodings
+using OrderedCollections
 
 export
     DataStore,
