@@ -728,9 +728,13 @@ Transforms the csv file from EAV (long) format to wide format dataset and regist
 - `api_token`: The API token for the REDCap project.
 - `study`: The Study object to associate with the REDCap project. If `study.study_id` is `nothing`, it will be created.
 - `domain`: The Domain object to associate with the REDCap project. If `domain.domain_id` is `nothing`, it will be created.
+- `vocabulary_prefix`: The prefix for the vocabulary used in the REDCap project (default is "REDCap").
+- `forms`: A vector of form names to include in the REDCap project (default is empty, meaning all forms).
+- `fields`: A vector of field names to include in the REDCap project (default is empty, meaning all fields).
 Returns nothing.
 """
-function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_token::AbstractString, study::Study, domain::Domain, vocabulary_prefix::String)
+function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_token::AbstractString, study::Study, domain::Domain; 
+    vocabulary_prefix::String = "REDCap",forms::Vector{String} = String[], fields::Vector{String} = String[])
     # Ensure study and domain are set up
     study = upsert_study!(study, store)
     domain = upsert_domain!(domain, store)

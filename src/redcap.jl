@@ -5,17 +5,26 @@
 Downloads REDCap data dictionary (metadata) as a DataFrame.
 Key columns you'll use: field_name, field_type, text_validation_type_or_show_slider_number,
 select_choices_or_calculations, field_label.
+- `url`: REDCap API URL
+- `token`: API token
+- `forms`: Optional vector of form names to filter by (default: all forms)
+- `fields`: Optional vector of field names to filter by (default: all fields)
 """
-function redcap_metadata(url::AbstractString, token::AbstractString; forms=nothing)::DataFrame
+function redcap_metadata(url::AbstractString, token::AbstractString; forms::Vector{String} = String[], fields::Vector{String} = String[])::DataFrame
     body = Dict(
         "token" => token,
         "content" => "metadata",
         "format" => "json",
         "returnFormat" => "json"
     )
-    if forms !== nothing
+    if !isempty(forms)
         for (i, f) in enumerate(forms)
             body["forms[$(i-1)]"] = f
+        end
+    end
+    if !isempty(fields)
+        for (i, f) in enumerate(fields)
+            body["fields[$(i-1)]"] = f
         end
     end
     headers = ["Content-Type" => "application/x-www-form-urlencoded"]
@@ -389,17 +398,18 @@ function redcap_fields(api_url::AbstractString, api_token::AbstractString;
     return unique(names)
 end
 """
-    redcap_export_eav(api_url::AbstractString, api_token::AbstractString; fields::Vector{String}=String[],lake_root = ENV["TRE_LAKE_PATH"], decode::Bool=false)::String
+    redcap_export_eav(api_url::AbstractString, api_token::AbstractString; forms::Vector{String}=String[], fields::Vector{String}=String[],lake_root = ENV["TRE_LAKE_PATH"], decode::Bool=false)::String
 
 Exports REDCap data in EAV format (Entity-Attribute-Value) as a CSV file.
 - api_url: REDCap API URL
 - api_token: API token
+- forms: Optional vector of form names to export (default: all forms)
 - fields: Optional vector of field names to export (default: all fields)
 - lake_root: Root directory for saving the export file (default: TRE_LAKE_PATH environment variable)
 - decode: If true, decode the response body from ISO-8859-2 to UTF-8 before saving
 Returns the path to the saved CSV file.
 """
-function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; fields::Vector{String}=String[],lake_root = ENV["TRE_LAKE_PATH"], decode::Bool=false)::String
+function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; forms::Vector{String}=String[], fields::Vector{String}=String[],lake_root = ENV["TRE_LAKE_PATH"], decode::Bool=false)::String
 
     f = isempty(fields) ? redcap_fields(api_url, api_token) : fields
     println(f)
@@ -409,9 +419,19 @@ function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; f
         "action"  => "export",
         "format"  => "csv",
         "type"    => "eav",
-        "fields"  => join(f, ","),
+        "csvDelimiter" => ",",
         "returnFormat" => "json",
     )
+    if !isempty(forms)
+        for (i, f) in enumerate(forms)
+            body["forms[$(i-1)]"] = f
+        end
+    end
+    if !isempty(fields)
+        for (i, f) in enumerate(fields)
+            body["fields[$(i-1)]"] = f
+        end
+    end
     body = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k,v) in form], "&")
     resp = HTTP.post(api_url; headers=["Content-Type"=>"application/x-www-form-urlencoded"], body=body)
     resp.status == 200 || error("EAV export failed: $(resp.status) $(String(resp.body))")
