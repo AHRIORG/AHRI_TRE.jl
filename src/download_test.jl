@@ -68,7 +68,7 @@ function download_redcap_records(api_url, api_token, lake_root)::String
     return outpath
 end
 
-function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; fields::Vector{String}=String[],lake_root = ENV["TRE_LAKE_PATH"], decode::Bool=false)::String
+function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; forms::Vector{String}=String[], fields::Vector{String}=String[],lake_root = ENV["TRE_LAKE_PATH"], decode::Bool=false)::String
 
     f = isempty(fields) ? redcap_fields(api_url, api_token) : fields
     println(f)
@@ -79,6 +79,8 @@ function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; f
         "format"  => "csv",
         "type"    => "eav",
         "fields"  => join(f, ","),
+        "forms"   => join(forms, ","),
+        "csvDelimiter" => ",",
         "returnFormat" => "json",
     )
     body = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k,v) in form], "&")
@@ -139,7 +141,7 @@ function redcap_fields(api_url::AbstractString, api_token::AbstractString;
     return unique(names)
 end
 
-path = redcap_export_eav(api_url, api_token, fields=String[], lake_root=lake_root, decode=true)
+path = redcap_export_eav(api_url, api_token, lake_root=lake_root, decode=true)
 println("Saved REDCap export to: $path")
 # Example usage:
 #=

@@ -26,7 +26,8 @@ do_createstudy = true
 do_updatestudy = true
 do_insertdomain = true
 do_entities = true
-do_variables = true
+do_variables = false
+do_redcap = true
 #endregion
 
 datastore = AHRI_TRE.DataStore(

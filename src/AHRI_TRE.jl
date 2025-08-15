@@ -718,6 +718,32 @@ function verify_blake3_digest(path::AbstractString, expected_hex::AbstractString
     digest = blake3_digest_hex(path)
     return lowercase(digest) == lowercase(expected_hex)
 end
+"""
+    ingest_redcap_project(api_url::AbstractString, api_token::AbstractString, study::Study, domain::Domain)
+
+Retrieves the REDCap project metadata and add the project variables to the TRE datastore.
+Downloads the REDCap project records in EAV format to a csv file and saves it to the data lake and creates an ingest transformation.
+Transforms the csv file from EAV (long) format to wide format dataset and registers the dataset in the TRE datastore.
+- `api_url`: The URL of the REDCap API endpoint.
+- `api_token`: The API token for the REDCap project.
+- `study`: The Study object to associate with the REDCap project. If `study.study_id` is `nothing`, it will be created.
+- `domain`: The Domain object to associate with the REDCap project. If `domain.domain_id` is `nothing`, it will be created.
+Returns nothing.
+"""
+function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_token::AbstractString, study::Study, domain::Domain, vocabulary_prefix::String)
+    # Ensure study and domain are set up
+    study = upsert_study!(study, store)
+    domain = upsert_domain!(domain, store)
+    register_redcap_datadictionary(store; domain_id=domain.domain_id, redcap_url=api_url, redcap_token=api_token, vocabulary_prefix=vocabulary_prefix)
+    # Download REDCap records in EAV format
+    path = redcap_export_eav(api_url, api_token, fields=fields)
+
+    # Save to data lake and register dataset
+    savedataframetolake(DataStore().lake, dataset_to_dataframe(DataStore().store, 1), "redcap_project_$(study.name)", "REDCap project $(study.name)")
+
+    return nothing
+end
+
 include("constants.jl")
 include("tredatabase.jl")
 include("redcap.jl")

@@ -343,3 +343,95 @@ function redcap_project_info_df(url::AbstractString, token::AbstractString)::Dat
     info = redcap_project_info(url, token; raw=false)
     return DataFrame([info])
 end
+"""
+    redcap_fields(api_url::AbstractString, api_token::AbstractString;
+    forms::Union{Nothing,Vector{String}}=nothing,
+    include_nondata::Bool=false)::Vector{String}
+
+Fetches REDCap metadata fields, optionally filtering by forms and including non-data fields.
+Returns a vector of field names.
+- url: REDCap API URL
+- token: API token
+- forms: Optional vector of form names to filter by (default: all forms)
+- include_nondata: If true, include non-data fields like descriptive, file, sql, signature
+"""
+function redcap_fields(api_url::AbstractString, api_token::AbstractString;
+    forms::Union{Nothing,Vector{String}}=nothing,
+    include_nondata::Bool=false)::Vector{String}
+    # Build request for REDCap metadata
+    body = Dict(
+        "token" => api_token,
+        "content" => "metadata",
+        "format" => "json",
+        "returnFormat" => "json",
+    )
+    if forms !== nothing
+        for (i, f) in enumerate(forms)
+            body["forms[$(i-1)]"] = f
+        end
+    end
+    form = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k,v) in body], "&")
+    resp = HTTP.post(api_url; headers=["Content-Type"=>"application/x-www-form-urlencoded", "Accept"=>"application/json"], body=form)
+    resp.status == 200 || error("REDCap metadata request failed $(resp.status): $(String(resp.body))")
+
+    md = JSON3.read(String(resp.body))  # array of objects
+    nondata = Set(["descriptive","file","sql","signature"])  # commonly non-data fields
+    names = String[]
+    for obj in md
+        nt = NamedTuple(obj)
+        fname = hasproperty(nt, :field_name) ? String(getfield(nt, :field_name)) : ""
+        isempty(fname) && continue
+        ftype = hasproperty(nt, :field_type) ? lowercase(String(getfield(nt, :field_type))) : ""
+        if include_nondata || !(ftype in nondata)
+            push!(names, fname)
+        end
+    end
+    return unique(names)
+end
+"""
+    redcap_export_eav(api_url::AbstractString, api_token::AbstractString; fields::Vector{String}=String[],lake_root = ENV["TRE_LAKE_PATH"], decode::Bool=false)::String
+
+Exports REDCap data in EAV format (Entity-Attribute-Value) as a CSV file.
+- api_url: REDCap API URL
+- api_token: API token
+- fields: Optional vector of field names to export (default: all fields)
+- lake_root: Root directory for saving the export file (default: TRE_LAKE_PATH environment variable)
+- decode: If true, decode the response body from ISO-8859-2 to UTF-8 before saving
+Returns the path to the saved CSV file.
+"""
+function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; fields::Vector{String}=String[],lake_root = ENV["TRE_LAKE_PATH"], decode::Bool=false)::String
+
+    f = isempty(fields) ? redcap_fields(api_url, api_token) : fields
+    println(f)
+    form = Dict(
+        "token"   => api_token,
+        "content" => "record",
+        "action"  => "export",
+        "format"  => "csv",
+        "type"    => "eav",
+        "fields"  => join(f, ","),
+        "returnFormat" => "json",
+    )
+    body = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k,v) in form], "&")
+    resp = HTTP.post(api_url; headers=["Content-Type"=>"application/x-www-form-urlencoded"], body=body)
+    resp.status == 200 || error("EAV export failed: $(resp.status) $(String(resp.body))")
+    # Ensure output directory exists: <TRE_LAKE_PATH>/ingests
+    out_dir = joinpath(lake_root, "ingests")
+    mkpath(out_dir)
+
+    # Choose a random unique filename (JSON, since format=json)
+    fname   = string("redcap_records_", Dates.format(now(), "yyyymmdd_HHMMSS"), "_", uuid4(), ".csv")
+    outpath = joinpath(out_dir, fname)
+
+    # Save to file
+    open(outpath, "w") do io
+        if !decode
+            write(io, resp.body)  # Write raw bytes directly
+            return outpath
+        end
+        s = StringEncodings.decode(resp.body, "ISO-8859-2") 
+        write(io, s)  # Convert to UTF-8
+    end
+
+    return outpath
+end
