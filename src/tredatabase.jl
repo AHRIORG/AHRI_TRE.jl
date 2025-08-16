@@ -559,10 +559,70 @@ function createassets(conn::DBInterface.Connection)
     COMMENT ON TABLE asset_versions IS 'Used to track different versions of assets';
     COMMENT ON COLUMN asset_versions.version_note IS 'Note about the version, e.g. description of changes';
     COMMENT ON COLUMN asset_versions.doi IS 'Digital Object Identifier for the version, if available';
-    COMMENT ON COLUMN asset_versions.is_latest IS 'Before inserting a new version, set all previous versions to FALSE';
+    COMMENT ON COLUMN asset_versions.is_latest IS 'Is this the latest version?';
+
     """
     DBInterface.execute(conn, sql)
     @info "Created asset_versions table"
+        # Ensure only the inserted version remains marked as latest per asset
+    sql = raw"""
+    CREATE OR REPLACE FUNCTION set_latest_asset_version() RETURNS trigger AS $$
+    BEGIN
+        UPDATE asset_versions
+           SET is_latest = FALSE
+         WHERE asset_id = NEW.asset_id
+           AND version_id <> NEW.version_id
+           AND is_latest = TRUE;
+        RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger WHERE tgname = 'trg_asset_versions_set_latest'
+        ) THEN
+            CREATE TRIGGER trg_asset_versions_set_latest
+            AFTER INSERT ON asset_versions
+            FOR EACH ROW
+            EXECUTE FUNCTION set_latest_asset_version();
+        END IF;
+    END$$;
+
+    -- Optional: enforce at most one latest per asset_id
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_asset_versions_one_latest
+        ON asset_versions(asset_id)
+        WHERE is_latest;
+    """
+    DBInterface.execute(conn, sql)
+    @info "Created trigger to ensure only one latest version per asset"
+    # Prevent changing major/minor/patch after creation
+    sql = raw"""
+    CREATE OR REPLACE FUNCTION prevent_version_number_update() RETURNS trigger AS $$
+    BEGIN
+        IF NEW.major IS DISTINCT FROM OLD.major
+           OR NEW.minor IS DISTINCT FROM OLD.minor
+           OR NEW.patch IS DISTINCT FROM OLD.patch THEN
+            RAISE EXCEPTION 'major/minor/patch are immutable once the version is created';
+        END IF;
+        RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger WHERE tgname = 'trg_asset_versions_immutable_numbers'
+        ) THEN
+            CREATE TRIGGER trg_asset_versions_immutable_numbers
+            BEFORE UPDATE ON asset_versions
+            FOR EACH ROW
+            EXECUTE FUNCTION prevent_version_number_update();
+        END IF;
+    END$$;
+    """
+    DBInterface.execute(conn, sql)
+    @info "Created trigger to prevent changes to major/minor/patch"
     sql = raw"""
     CREATE TABLE IF NOT EXISTS datasets (
         dataset_id UUID PRIMARY KEY,

@@ -250,7 +250,7 @@ This function downloads the REDCap metadata, processes it, and registers variabl
 """
 function register_redcap_datadictionary(store::DataStore;
     domain_id::Int, redcap_url::String, redcap_token::String,
-    dataset_id::Union{Nothing,UUID}=nothing, forms=nothing, vocabulary_prefix::String="")::DataFrame
+    forms=String[], vocabulary_prefix::String="")::DataFrame
     db = store.store
     DBInterface.execute(db, "BEGIN;")
     try
@@ -293,21 +293,6 @@ function register_redcap_datadictionary(store::DataStore;
             first_row = false
             push!(out, (fname, variable_id, vtype_id, vocab_id, ftype, fvalid, flabel, fnote))
         end
-
-        if dataset_id !== nothing && !isempty(out.variable_id)
-            stmt = DBInterface.prepare(
-                db,
-                raw"""
-                INSERT INTO dataset_variables (dataset_id, variable_id)
-                VALUES ($1,$2)
-                ON CONFLICT DO NOTHING;
-            """
-            )
-            for vid in out.variable_id
-                DBInterface.execute(stmt, (dataset_id, vid))
-            end
-        end
-
         DBInterface.execute(db, "COMMIT;")
         return out
     catch e

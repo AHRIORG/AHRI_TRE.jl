@@ -21,6 +21,8 @@ using JSON3
 using Downloads
 using StringEncodings
 using OrderedCollections
+using TranscodingStreams
+using CodecZstd
 
 export
     DataStore,
@@ -34,7 +36,7 @@ export
     get_namedkey, get_variable_id, get_variable, get_datasetname, updatevalues, insertdata, insertwithidentity,
     get_table, selectdataframe, prepareselectstatement, dataset_to_dataframe, dataset_to_arrow, dataset_to_csv,
     dataset_variables, dataset_column, savedataframe,
-    register_redcap_datadictionary
+    ingest_redcap_project, register_redcap_datadictionary
 
 #region Structure
 Base.@kwdef mutable struct DataStore
@@ -98,7 +100,43 @@ Base.@kwdef mutable struct EntityRelation
     ontology_namespace::Union{Missing,String} = missing
     ontology_class::Union{Missing,String} = missing
 end
+# Define supertypes to break circular concrete references
+abstract type AbstractAsset end
+abstract type AbstractAssetVersion end
 
+Base.@kwdef mutable struct Asset <: AbstractAsset
+    asset_id::Union{UUID,Nothing} = nothing
+    study::Study
+    name::String
+    description::Union{Missing,String} = missing
+    asset_type::String = "dataset" # "dataset" or "file"
+    # Use abstract element type; avoid AssetVersion[] default (would reference before defined)
+    versions::Vector{AbstractAssetVersion} = AbstractAssetVersion[]
+end
+
+Base.@kwdef mutable struct AssetVersion <: AbstractAssetVersion
+    version_id::Union{UUID,Nothing} = nothing
+    # Reference abstract to avoid circular concrete dependency
+    asset::AbstractAsset
+    major::Int32 = 1
+    minor::Int32 = 0
+    patch::Int32 = 0
+    note::Union{Missing,String} = missing
+    doi::Union{Missing,String} = missing
+    is_latest::Bool = true
+end
+
+Base.@kwdef mutable struct DataFile
+    assetversion::AssetVersion
+    compressed::Bool = false
+    encrypted::Bool = false
+    compression_algorithm::Union{String,Missing} = missing
+    encryption_algorithm::Union{String,Missing} = missing
+    salt::Union{Missing,String} = missing
+    storage_uri::String = ""
+    edam_format::Union{Missing,String} = missing
+    digest::Union{Missing,String} = missing
+end
 #endregion
 """
     createdatastore(store::DataStore; superuser::String="postgres", superpwd::String="", port::Integer=5432)
@@ -173,11 +211,11 @@ function upsert_study!(study::Study, store::DataStore)::Study
 end
 
 """
-    get_study(db::DBInterface.Connection, name)
+    get_studyid(db::DBInterface.Connection, name)
 
 Return the `source_id` of source `name`, returns `missing` if source doesn't exist
 """
-function get_study(store::DataStore, name::AbstractString)::Union{UUID,Nothing}
+function get_studyid(store::DataStore, name::AbstractString)::Union{UUID,Nothing}
     study_id = get_namedkey(store.store, "studies", name, :study_id)
     @info "Study ID for $(name): $(study_id)"
     if ismissing(study_id)
@@ -185,7 +223,34 @@ function get_study(store::DataStore, name::AbstractString)::Union{UUID,Nothing}
     end
     return UUID(study_id)
 end
+"""
+    get_study(store::DataStore, name::AbstractString)::Union{Study,Nothing}
 
+Return a Study object by its name in the specified DataStore.
+"""
+function get_study(store::DataStore, name::AbstractString)::Union{Study,Nothing}
+    db = store.store
+    sql = raw"""
+        SELECT study_id, name, description, external_id, study_type_id
+          FROM studies
+         WHERE name = $1
+         LIMIT 1;
+    """
+    stmt = DBInterface.prepare(db, sql)
+    df = DBInterface.execute(stmt, (name,)) |> DataFrame
+    if nrow(df) == 0
+        @info "No study found with name: $(name)"
+        return nothing
+    end
+    row = df[1, :]
+    return Study(
+        study_id=UUID(row.study_id),
+        name=row.name,
+        description=coalesce(row.description, missing),
+        external_id=row.external_id,
+        study_type_id=row.study_type_id
+    )
+end
 """
     upsert_domain!(domain::Domain, store::DataStore)::Domain
 
@@ -679,33 +744,11 @@ function get_datasetname(db::DBInterface.Connection, dataset)
     end
 end
 """
-    path_to_file_uri(path::AbstractString) -> String
-
-Converts a local file path to a properly encoded file:// URI.
-"""
-function path_to_file_uri(path::AbstractString)
-    # Normalize and get absolute path
-    abs_path = string(normpath(abspath(path)))
-
-    # Handle Windows paths (convert backslashes and add slash before drive letter)
-    if Sys.iswindows()
-        abs_path = replace(abs_path, "\\" => "/")
-        if occursin(r"^[A-Za-z]:", abs_path)
-            abs_path = "/" * abs_path  # e.g. /C:/Users/...
-        end
-    end
-
-    # Percent-encode using URI constructor
-    uri = URI("file://" * abs_path)
-    return string(uri)
-end
-
-"""
     blake3_digest_hex(path::AbstractString) -> String
 
 Computes the BLAKE3 digest of a file and returns it as a hexadecimal string.
 """
-function blake3_digest_hex(path::AbstractString)
+function blake3_digest_hex(path::AbstractString)::String
     open(path, "r") do io
         digest_bytes = blake3sum(io)
         return lowercase(bytes2hex(digest_bytes))
@@ -728,26 +771,201 @@ Downloads the REDCap project records in EAV format to a csv file and saves it to
 Transforms the csv file from EAV (long) format to wide format dataset and registers the dataset in the TRE datastore.
 - `api_url`: The URL of the REDCap API endpoint.
 - `api_token`: The API token for the REDCap project.
-- `study`: The Study object to associate with the REDCap project. If `study.study_id` is `nothing`, it will be created.
-- `domain`: The Domain object to associate with the REDCap project. If `domain.domain_id` is `nothing`, it will be created.
+- `study`: The Study object to associate with the REDCap project. 
+- `domain`: The Domain object to associate with the REDCap project.
 - `vocabulary_prefix`: The prefix for the vocabulary used in the REDCap project (default is "REDCap").
 - `forms`: A vector of form names to include in the REDCap project (default is empty, meaning all forms).
 - `fields`: A vector of field names to include in the REDCap project (default is empty, meaning all fields).
 Returns nothing.
 """
-function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_token::AbstractString, study::Study, domain::Domain; 
-    vocabulary_prefix::String = "REDCap",forms::Vector{String} = String[], fields::Vector{String} = String[])
-    # Ensure study and domain are set up
-    study = upsert_study!(study, store)
-    domain = upsert_domain!(domain, store)
+function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_token::AbstractString, study::Study, domain::Domain;
+    vocabulary_prefix::String="REDCap", forms::Vector{String}=String[], fields::Vector{String}=String[])
     register_redcap_datadictionary(store; domain_id=domain.domain_id, redcap_url=api_url, redcap_token=api_token, vocabulary_prefix=vocabulary_prefix)
+    @info "Registered REDCap datadictionary for study: $(study.name) in domain: $(domain.name)"
     # Download REDCap records in EAV format
-    path = redcap_export_eav(api_url, api_token, fields=fields)
-
-    # Save to data lake and register dataset
-    savedataframetolake(DataStore().lake, dataset_to_dataframe(DataStore().store, 1), "redcap_project_$(study.name)", "REDCap project $(study.name)")
-
+    path = redcap_export_eav(api_url, api_token, forms=forms, fields=fields)
+    @info "Downloaded REDCap EAV export to: $path"
+    datafile = attach_datafile(store, study, "REDCap EAV Export for $(study.name)", path, "http://edamontology.org/format_3752"; compress=true)
+    @info "Attached data file: $(datafile.storage_uri) with digest $(datafile.digest)"
+    #TODO: Create an ingest transformation to record this ingestion
     return nothing
+end
+"""
+    create_asset(store::DataStore, study::Study, name::String, type::String, description::Union{Missing,String}=missing)::Asset
+
+Create a new asset in the TRE datastore and the base version of the asset.
+- `store`: The DataStore object containing connection details for the datastore.
+- `study`: The Study object to associate with the asset.
+- `name`: The name of the asset.
+- `type`: The type of the asset, either "dataset" or "file".
+- `description`: An optional description of the asset (default is missing).
+Returns the created Asset object with its asset_id and the first version.
+"""
+function create_asset(store::DataStore, study::Study, name::String, type::String, description::Union{Missing,String}=missing)::Asset
+    asset = Asset(study=study, name=name, description=description, type=type)
+    db = store.store
+    sql = raw"""
+        INSERT INTO assets (study_id, name, description, type)
+        VALUES ($1, $2, $3, $4)
+        RETURNING asset_id;
+    """
+    stmt = DBInterface.prepare(db, sql)
+    df = DBInterface.execute(stmt, (asset.study.study_id, asset.name, asset.description, asset.asset_type)) |> DataFrame
+    asset.asset_id = UUID(df[1, :asset_id])
+    # Create the first version of the asset
+    version = AssetVersion(asset=asset, major=1, minor=0, patch=0, note="Initial version", is_latest=true)
+    sql_version = raw"""
+        INSERT INTO asset_versions (asset_id, major, minor, patch, note, is_latest)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING version_id;
+    """
+    stmt_version = DBInterface.prepare(db, sql_version)
+    df_version = DBInterface.execute(stmt_version, (asset.asset_id, version.major, version.minor, version.patch, version.note, version.is_latest)) |> DataFrame
+    version.version_id = UUID(df_version[1, :version_id])
+    push!(asset.versions, version)
+    return asset
+end
+"""
+    attach_datafile(store::DataStore, study::Study, file_path::AbstractString, edam_format::String; compress::Bool=false, encrypt::Bool=false)::DataFile
+
+Attach a data file that is already in the data lake to the TRE datastore.
+- `store`: The DataStore object containing connection details for the datastore.
+- `study`: The Study object to associate with the data file.
+- `file_path`: The full path including the file name to the file.
+- `edam_format`: The EDAM format of the data file (e.g., "http://edamontology.org/format_3752" for a csv file).
+- `compress`: Whether the file should be compressed (default is false). 
+   If true, the file will be compressed using zstd, and the existing file will be replaced with the compressed version.
+- `encrypt`: Whether the file should be encrypted (default is false). **NOT currently implemented**
+This function does not copy the file, it only registers it in the TRE datastore.
+It assumes the file is already in the data lake and creates an Asset object with a base version
+"""
+function attach_datafile(store::DataStore, study::Study, asset_name::String, file_path::AbstractString, edam_format::String;
+    description::Union{String,Missing}=missing, compress::Bool=false, encrypt::Bool=false)::DataFile
+    # Throw not implemented error if encrypt is true
+    if encrypt
+        throw(ErrorException("Encryption is not currently implemented."))
+    end
+    # Ensure the file exists
+    if !isfile(file_path)
+        throw(ArgumentError("File does not exist: $file_path"))
+    end
+    datafile = DataFile(
+        storage_uri=path_to_file_uri(file_path),
+        edam_format=edam_format,
+        encrypt=encrypt,
+        compress=compress
+    )
+    # If compress is true, compress the file
+    if compress
+        compressed_path = file_path * ".zst"
+        if !isfile(compressed_path)
+            open(file_path, "r") do infile
+                open(ZstdCompressorStream, compressed_path, "w") do outfile
+                    write(outfile, infile)
+                end
+            end
+            datafile.storage_uri = path_to_file_uri(compressed_path)  # Update to the compressed file path
+            datafile.compression_algorithm = "zstd"
+            @info "Compressed file created: $compressed_path"
+            # Delete the original file if compression was successful
+            rm(file_path; force=true)
+            file_path = compressed_path  # Update to the compressed file path
+        else
+            throw(ArgumentError("Compressed file already exists: $compressed_path"))
+        end
+    end
+    # Obtain Blake3 file digest
+    datafile.digest = blake3_digest_hex(file_path)
+    @info "File digest: $(datafile.digest)"
+    # Create the Asset object
+    asset = create_asset(store, study, asset_name, "file", description)
+    datafile.assetversion = asset.versions[1]  # Use the base version of the asset
+    # Add the datafile to the datastore
+    db = store.store
+    sql = raw"""
+        INSERT INTO datafiles (datafile_id, compressed, encrypted, compression_algorithm, storage_uri, edam_format, digest)
+        VALUES ($1, $2, $3, $4, $5, $6, $7);
+    """
+    stmt = DBInterface.prepare(db, sql)
+    DBInterface.execute(stmt, (datafile.assetversion.version_id, compressed, encrypted, datafile.compression_algorithm,
+        datafile.storage_uri, datafile.edam_format, datafile.digest))
+    return datafile
+end
+
+using URIs
+
+"""
+    path_to_file_uri(path::AbstractString) -> String
+
+Convert a local filesystem path (Windows or Unix) to a `file://` URI.
+- Windows local path:   C:\\Users\\me\\file.txt   -> file:///C:/Users/me/file.txt
+- Windows UNC path:     \\\\srv\\share\\f.txt     -> file://srv/share/f.txt
+- Unix path:            /home/me/file.txt         -> file:///home/me/file.txt
+"""
+function path_to_file_uri(path::AbstractString)::String
+    abs_path = abspath(path)
+
+    if Sys.iswindows()
+        # UNC: \\server\share\path -> file://server/share/path
+        if startswith(abs_path, "\\\\")
+            # Split \\server\share\rest...
+            parts = split(abs_path[3:end], '\\'; limit=2)  # after leading "\\"
+            isempty(parts) && throw(ArgumentError("Invalid UNC path: $path"))
+            host = parts[1]
+            tail = length(parts) == 2 ? parts[2] : ""
+            # Build "file://host/<share/segments...>"
+            # Convert backslashes to forward slashes, then escape
+            tail_norm = replace(tail, '\\' => '/')
+            return "file://" * host * (isempty(tail_norm) ? "" : "/" * escapeuri(tail_norm))
+        else
+            # Local drive path: C:\Users\me -> file:///C:/Users/me
+            norm_path = replace(abs_path, '\\' => '/')
+            return "file:///" * escapeuri(norm_path)
+        end
+    else
+        # Unix-like
+        return "file://" * escapeuri(abs_path)  # abs_path already starts with "/"
+    end
+end
+
+"""
+    file_uri_to_path(uri::AbstractString) -> String
+
+Convert a `file://` URI to a local filesystem path (Windows or Unix).
+Handles:
+- file:///C:/...        -> C:\\... (Windows)
+- file://server/share   -> \\\\server\\share (Windows UNC)
+- file:///home/me/...   -> /home/me/... (Unix)
+"""
+function file_uri_to_path(uri::AbstractString)::String
+    u = URI(uri)
+    u.scheme == "file" || throw(ArgumentError("Not a file:// URI"))
+
+    # Decode path portion (slashes still present)
+    decoded_path = unescapeuri(u.path)  # e.g., "/C:/Users/me", "/share/f.txt", "/home/me"
+
+    if Sys.iswindows()
+        if !isempty(u.host)
+            # UNC: file://server/share/dir/file -> \\server\share\dir\file
+            tail = decoded_path
+            # For UNC, u.path should start with "/share..." — drop the leading "/"
+            if startswith(tail, "/")
+                tail = tail[2:end]
+            end
+            return "\\\\" * u.host * "\\" * replace(tail, '/' => '\\')
+        else
+            # Local path: file:///C:/... (u.host empty, path like "/C:/...")
+            p = decoded_path
+            # Strip the single leading slash before the drive letter
+            if startswith(p, "/") && occursin(r"^[A-Za-z]:", p[2:end])
+                p = p[2:end]
+            end
+            return replace(p, '/' => '\\')
+        end
+    else
+        # Unix-like: host should be empty or "localhost"; treat both as local
+        return decoded_path
+    end
 end
 
 include("constants.jl")

@@ -11,7 +11,7 @@ using Dates
 dotenv()
 
 #region Setup Logging
-logger = FormatLogger(open("logs/new_store.log", "w")) do io, args
+logger = FormatLogger(open("logs/redcap.log", "w")) do io, args
   # Write the module, level and message only
   println(io, args._module, " | ", "[", args.level, "] ", args.message)
 end
@@ -21,11 +21,11 @@ old_logger = global_logger(minlogger)
 start_time = Dates.now()
 
 #region Execution flags
-do_createstore = true
-do_createstudy = true
-do_updatestudy = true
-do_insertdomain = true
-do_entities = true
+do_createstore = false
+do_createstudy = false
+do_updatestudy = false
+do_insertdomain = false
+do_entities = false
 do_variables = false
 do_redcap = true
 #endregion
@@ -39,13 +39,38 @@ datastore = AHRI_TRE.DataStore(
   lake_user=ENV["LAKE_USER"],
   lake_data=ENV["TRE_LAKE_PATH"]
 )
+@info "Execution started at: ", Dates.now()
+
 if do_createstore
   AHRI_TRE.createdatastore(datastore; superuser=ENV["SUPER_USER"], superpwd=ENV["SUPER_PWD"])
   @info "DataStore created or replaced at: $(datastore.server)"
 end
 datastore = AHRI_TRE.opendatastore(datastore)
 try
-  println("Execution started at: ", Dates.now())
+  study = nothing
+  domain = nothing
+  if !do_createstudy
+    study = get_study(datastore, "APCC")
+    if isnothing(study)
+      @info "Study 'APCC' not found, creating a new one."
+      global do_createstudy = true
+    else
+      @info "Found existing study: $(study.name) with ID $(study.study_id)"
+    end
+  else
+    @info "Creating a new study."
+  end
+  if !do_insertdomain
+    domain = get_domain(datastore, "APCC")
+    if isnothing(domain)
+      @info "Domain 'APCC' not found, inserting a new one."
+      global do_insertdomain = true
+    else
+      @info "Found existing domain: $(domain.name) with ID $(domain.domain_id)"
+    end
+  else
+    @info "Inserting a new domain."
+  end
   if do_createstudy
     study = Study(
       name="APCC Update",
@@ -57,13 +82,7 @@ try
     @info "Study created or updated: $(study.name) with ID $(study.study_id)"
   end
   if do_updatestudy
-    study = Study(
-      study_id=get_study(datastore, "APCC Update"),  # Assuming "APCC Update" exists
-      name="APCC Update",
-      description="Update APCC cohort data and contact information",
-      external_id="APCC_Update",
-      study_type_id=3
-    )
+    study.description = "Updated description for APCC cohort"
     study = upsert_study!(study, datastore)
     @info "Study updated: $(study.name) with ID $(study.study_id)"
   end
@@ -125,8 +144,11 @@ try
       forms=nothing,                      # or ["enrolment_form","visit_form"]
       vocabulary_prefix="apcc"
     )
-
-    @info first(vars_map, 10)
+  end
+  if do_redcap
+    @info "Ingesting REDCap project data into the datastore"
+    ingest_redcap_project(datastore, ENV["REDCAP_API_URL"], ENV["REDCAP_API_TOKEN"], study, domain)
+    @info "REDCap project data ingested successfully"
   end
 finally
   closedatastore(datastore)
