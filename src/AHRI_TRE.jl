@@ -127,7 +127,7 @@ Base.@kwdef mutable struct AssetVersion <: AbstractAssetVersion
 end
 
 Base.@kwdef mutable struct DataFile
-    assetversion::AssetVersion
+    assetversion::Union{AssetVersion,Nothing} = nothing
     compressed::Bool = false
     encrypted::Bool = false
     compression_algorithm::Union{String,Missing} = missing

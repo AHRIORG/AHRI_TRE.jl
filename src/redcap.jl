@@ -1,4 +1,74 @@
 """
+    redcap_post(body::Dict)::HTTP.Response
+
+Do a POST request to the REDCap API with the given body.
+- `api_url`: REDCap API URL
+- `body`: Dictionary containing the POST parameters
+- `retry`: Number of retry attempts in case of failure (default: 5)
+Returns the HTTP response object.
+"""
+function redcap_post(api_url, body::AbstractDict; retry=5)::HTTP.Response
+    form = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k, v) in body], "&")
+    resp = nothing
+    for attempt in 1:retry
+        try
+            resp = HTTP.post(api_url; headers=["Content-Type" => "application/x-www-form-urlencoded"], body=form)
+            break
+        catch e
+            if attempt == retry
+                error("REDCap metadata request failed after $(retry) attempts: $(e)")
+            end
+            @info "REDCap metadata request failed (attempt $(attempt)/$(retry)): $(e)"
+            @info "Retrying in $(attempt) seconds..."
+            sleep(attempt)  # Incremental backoff
+        end
+    end
+    resp.status == 200 || error("REDCap post request failed $(resp.status): $(String(resp.body))")
+    @info "Response headers: $(resp.headers)"
+    return resp
+end
+"""
+    redcap_post(api_url, body::Dict, outputfile::String; decode::Bool=false, retry=5)::Bool
+
+Do a POST request to the REDCap API with the given body and save the response to a file.
+- `api_url`: REDCap API URL
+- `body`: Dictionary containing the POST parameters
+- `outputfile`: File path to save the response
+- `decode`: If true, decode the response body from ISO-8859-2 to UTF-8 before saving
+- `retry`: Number of retry attempts in case of failure (default: 5)
+Returns true if successful, false otherwise.
+"""
+function redcap_post(api_url, body::AbstractDict, outputfile::String; decode::Bool=false, retry=5)::Bool
+    form = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k, v) in body], "&")
+    headers = ["Content-Type" => "application/x-www-form-urlencoded"]  # add Accept if needed
+    resp = nothing
+    for attempt in 1:retry
+        try
+            open(outputfile, "w") do rawio
+                if decode
+                    enc_out = StringEncoder(rawio, Encoding("UTF-8"), Encoding("ISO-8859-2"))
+                    try
+                        resp = HTTP.post(api_url; headers=headers, body=form, response_stream=enc_out)
+                    finally
+                        close(enc_out)  # flush encoder
+                    end
+                else
+                    resp = HTTP.post(api_url; headers=headers, body=form, response_stream=rawio)
+                end
+                # @info "HTTP Status: $(resp.status)"
+                return resp.status == 200
+            end
+        catch e
+            if attempt == retry
+                error("REDCap request failed after $(retry) attempts: $(e)")
+            end
+            @info "REDCap request failed (attempt $(attempt)/$(retry)): $(e)"
+            sleep(attempt)  # incremental backoff
+        end
+    end
+    return false
+end
+"""
     redcap_metadata(url::AbstractString, token::AbstractString;
                     forms::Union{Nothing,Vector{String}}=nothing) -> DataFrame
 
@@ -11,7 +81,7 @@ Downloads REDCap data dictionary (metadata) as a DataFrame.
 Returns a DataFrame with columns: field_name, field_type, text_validation_type_or_show_slider_number,
 select_choices_or_calculations, field_label, field_note.
 """
-function redcap_metadata(url::AbstractString, token::AbstractString; forms::Vector{String} = String[], fields::Vector{String} = String[])::DataFrame
+function redcap_metadata(url::AbstractString, token::AbstractString; forms::Vector{String}=String[], fields::Vector{String}=String[])::DataFrame
     body = Dict(
         "token" => token,
         "content" => "metadata",
@@ -28,9 +98,7 @@ function redcap_metadata(url::AbstractString, token::AbstractString; forms::Vect
             body["fields[$(i-1)]"] = f
         end
     end
-    headers = ["Content-Type" => "application/x-www-form-urlencoded"]
-    form = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k, v) in body], "&")
-    resp = HTTP.post(url, headers, form)
+    resp = redcap_post(url, body)
     resp.status == 200 || error("REDCap metadata error $(resp.status): $(String(resp.body))")
     return DataFrame(JSON3.read(String(resp.body)))
 end
@@ -318,9 +386,7 @@ function redcap_project_info(url::AbstractString, token::AbstractString; raw::Bo
         "format" => "json",
         "returnFormat" => "json"
     )
-    headers = ["Content-Type" => "application/x-www-form-urlencoded"]
-    form = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k, v) in body], "&")
-    resp = HTTP.post(url, headers, form)
+    resp = redcap_post(url, body)
     resp.status == 200 || error("REDCap project info error $(resp.status): $(String(resp.body))")
     obj = JSON3.read(String(resp.body))  # single JSON object
     raw && return obj
@@ -352,7 +418,7 @@ Returns a vector of field names.
 """
 function redcap_fields(api_url::AbstractString, api_token::AbstractString;
     forms::Union{Nothing,Vector{String}}=nothing,
-    include_nondata::Bool=false)::Vector{String}
+    include_nondata::Bool=false, retry::Integer=5)::Vector{String}
     # Build request for REDCap metadata
     body = Dict(
         "token" => api_token,
@@ -365,12 +431,10 @@ function redcap_fields(api_url::AbstractString, api_token::AbstractString;
             body["forms[$(i-1)]"] = f
         end
     end
-    form = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k,v) in body], "&")
-    resp = HTTP.post(api_url; headers=["Content-Type"=>"application/x-www-form-urlencoded", "Accept"=>"application/json"], body=form)
-    resp.status == 200 || error("REDCap metadata request failed $(resp.status): $(String(resp.body))")
 
-    md = JSON3.read(String(resp.body))  # array of objects
-    nondata = Set(["descriptive","file","sql","signature"])  # commonly non-data fields
+    resp = redcap_post(api_url, body)
+    md = JSON3.read(String(resp.body))
+    nondata = Set(["descriptive", "file", "sql", "signature"])  # commonly non-data fields
     names = String[]
     for obj in md
         nt = NamedTuple(obj)
@@ -396,16 +460,23 @@ Exports REDCap data in EAV format (Entity-Attribute-Value) as a CSV file.
 Returns the path to the saved CSV file.
 **REDCap Bug**: The API ignores the `fields` parameter and returns all fields, irrespective of the `fields` parameter.
 """
-function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; forms::Vector{String}=String[], fields::Vector{String}=String[],lake_root = ENV["TRE_LAKE_PATH"], decode::Bool=false)::String
+function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; forms::Vector{String}=String[], fields::Vector{String}=String[], lake_root=ENV["TRE_LAKE_PATH"], decode::Bool=false)::String
+    # Ensure output directory exists: <TRE_LAKE_PATH>/ingests
+    out_dir = joinpath(lake_root, "ingests")
+    mkpath(out_dir)
+
+    # Choose a random unique filename (JSON, since format=json)
+    fname = string("redcap_records_", Dates.format(now(), "yyyymmdd_HHMMSS"), "_", uuid4(), ".csv")
+    outpath = joinpath(out_dir, fname)
 
     f = isempty(fields) ? redcap_fields(api_url, api_token) : fields
 
     body = OrderedDict(
-        "token"   => api_token,
+        "token" => api_token,
         "content" => "record",
-        "action"  => "export",
-        "format"  => "csv",
-        "type"    => "eav",
+        "action" => "export",
+        "format" => "csv",
+        "type" => "eav",
         "csvDelimiter" => ",",
         "returnFormat" => "json",
     )
@@ -419,25 +490,8 @@ function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; f
             body["fields[$(i-1)]"] = f
         end
     end
-    form = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k,v) in body], "&")
-    resp = HTTP.post(api_url; headers=["Content-Type"=>"application/x-www-form-urlencoded"], body=form)
-    resp.status == 200 || error("EAV export failed: $(resp.status) $(String(resp.body))")
-    # Ensure output directory exists: <TRE_LAKE_PATH>/ingests
-    out_dir = joinpath(lake_root, "ingests")
-    mkpath(out_dir)
-
-    # Choose a random unique filename (JSON, since format=json)
-    fname   = string("redcap_records_", Dates.format(now(), "yyyymmdd_HHMMSS"), "_", uuid4(), ".csv")
-    outpath = joinpath(out_dir, fname)
-
-    # Save to file
-    open(outpath, "w") do io
-        if !decode
-            write(io, resp.body)  # Write raw bytes directly
-            return outpath
-        end
-        s = StringEncodings.decode(resp.body, "ISO-8859-2") 
-        write(io, s)  # Convert to UTF-8
+    if !redcap_post(api_url, body, outpath; decode = decode) 
+        error("Failed to export REDCap data to $(outpath)")
     end
 
     return outpath
