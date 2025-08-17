@@ -23,15 +23,15 @@ using StringEncodings
 using OrderedCollections
 using TranscodingStreams
 using CodecZstd
+using Git
 
 export
-    DataStore,
-    Vocabulary, VocabularyItem,
-    AbstractStudy, Study, Domain, Entity, EntityRelation,
+    DataStore, Vocabulary, VocabularyItem, AbstractStudy, Study, Domain, Entity, EntityRelation,
+    AbstractAsset, Asset, AbstractAssetVersion, AssetVersion, DataFile, Transformation,
     createdatastore, opendatastore, closedatastore,
     upsert_study!, upsert_domain!, get_domain, get_study,
     upsert_entity!, get_entity, upsert_entityrelation!, get_entityrelation, list_domainentities, list_domainrelations,
-    datasetlakename,
+    datasetlakename, git_commit_info,
     lookup_variables,
     get_namedkey, get_variable_id, get_variable, get_datasetname, updatevalues, insertdata, insertwithidentity,
     get_table, selectdataframe, prepareselectstatement, dataset_to_dataframe, dataset_to_arrow, dataset_to_csv,
@@ -50,16 +50,6 @@ Base.@kwdef mutable struct DataStore
     lake_password::String = "" # Password for DuckDB data lake
     store::Union{DBInterface.Connection,Nothing} = nothing # Connection to the TRE datastore
     lake::Union{DBInterface.Connection,Nothing} = nothing # Connection to the DuckDB data lake
-end
-struct VocabularyItem
-    value::Int64
-    code::String
-    description::Union{String,Missing}
-end
-struct Vocabulary
-    name::String
-    description::String
-    items::Vector{VocabularyItem}
 end
 
 abstract type AbstractStudy end
@@ -137,6 +127,48 @@ Base.@kwdef mutable struct DataFile
     edam_format::Union{Missing,String} = missing
     digest::Union{Missing,String} = missing
 end
+
+abstract type AbstractVocabulary end
+abstract type AbstractVocabularyItem end
+
+Base.@kwdef mutable struct VocabularyItem <: AbstractVocabularyItem
+    vocabulary_item_id::Union{Int,Nothing} = nothing
+    vocabulary_id::Int
+    value::Int64
+    code::String
+    description::Union{String,Missing}
+end
+
+Base.@kwdef mutable struct Vocabulary <: AbstractVocabulary
+    vocabulary_id::Union{Int,Nothing} = nothing
+    name::String
+    description::Union{String,Missing} = missing
+    items::Vector{AbstractVocabularyItem} = AbstractVocabularyItem[]
+end
+
+Base.@kwdef mutable struct Variable
+    variable_id::Union{Int,Nothing} = nothing
+    domain_id::Int
+    name::String
+    value_type_id::Int
+    vocabulary::Union{Missing,Vocabulary} = missing
+end
+
+Base.@kwdef mutable struct DataSet
+    assetversion::Union{AssetVersion,Nothing} = nothing
+    variables::Vector{Variable} = Variable[]
+end
+
+Base.@kwdef mutable struct Transformation
+    transformation_id::Union{Integer,Nothing} = nothing
+    transformation_type::String = "transform" # "ingest", "transform", "entity", "export"
+    description::String
+    repository_url::Union{String,Nothing} = nothing
+    commit_hash::Union{String,Nothing} = nothing
+    file_path::String # Path to the script or notebook in the repository
+    inputs::Vector{AssetVersion} = AssetVersion[] # Input asset versions
+    outputs::Vector{AssetVersion} = AssetVersion[] # Output asset versions
+end
 #endregion
 """
     createdatastore(store::DataStore; superuser::String="postgres", superpwd::String="", port::Integer=5432)
@@ -179,38 +211,6 @@ function createdatastore(store::DataStore; superuser::String="postgres", superpw
 end
 
 """
-    upsert_study!(study::Study, store::DataStore)::Study
-
-Create or update a study record. If a study with the same name already exists, it updates and returns the study.
-Otherwise, it inserts a new row and returns the new study.
-If `study.study_id` is `nothing`, it inserts a new study and lets PostgreSQL assign
-"""
-function upsert_study!(study::Study, store::DataStore)::Study
-    db = store.store
-    if study.study_id === nothing
-        # Insert letting PostgreSQL assign uuidv7() default
-        @info "Inserting new study: $(study.name)"
-        sql = raw"""
-        INSERT INTO studies (name, description, external_id, study_type_id)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (name) DO UPDATE
-        SET description   = EXCLUDED.description,
-            external_id   = EXCLUDED.external_id,
-            study_type_id = EXCLUDED.study_type_id
-        RETURNING study_id;
-        """
-        stmt = DBInterface.prepare(db, sql)
-        df = DBInterface.execute(stmt, (study.name, study.description, study.external_id, study.study_type_id)) |> DataFrame
-        study.study_id = UUID(df[1, :study_id])
-    else
-        @info "Updating existing study: $(study.name) with ID $(study.study_id)"
-        updatevalues(db, "studies", "study_id", study.study_id, ["name", "description", "external_id", "study_type_id"],
-            [study.name, study.description, study.external_id, study.study_type_id])
-    end
-    return study
-end
-
-"""
     get_studyid(db::DBInterface.Connection, name)
 
 Return the `source_id` of source `name`, returns `missing` if source doesn't exist
@@ -224,283 +224,6 @@ function get_studyid(store::DataStore, name::AbstractString)::Union{UUID,Nothing
     return UUID(study_id)
 end
 """
-    get_study(store::DataStore, name::AbstractString)::Union{Study,Nothing}
-
-Return a Study object by its name in the specified DataStore.
-"""
-function get_study(store::DataStore, name::AbstractString)::Union{Study,Nothing}
-    db = store.store
-    sql = raw"""
-        SELECT study_id, name, description, external_id, study_type_id
-          FROM studies
-         WHERE name = $1
-         LIMIT 1;
-    """
-    stmt = DBInterface.prepare(db, sql)
-    df = DBInterface.execute(stmt, (name,)) |> DataFrame
-    if nrow(df) == 0
-        @info "No study found with name: $(name)"
-        return nothing
-    end
-    row = df[1, :]
-    return Study(
-        study_id=UUID(row.study_id),
-        name=row.name,
-        description=coalesce(row.description, missing),
-        external_id=row.external_id,
-        study_type_id=row.study_type_id
-    )
-end
-"""
-    upsert_domain!(domain::Domain, store::DataStore)::Domain
-
-Create or update a domain record. If a domain with the same (name, uri) already
-exists (treating NULL uri correctly), it updates and returns its domain_id.
-Otherwise, it inserts a new row and returns the new domain_id.
-"""
-function upsert_domain!(domain::Domain, store::DataStore)::Domain
-    db = store.store
-
-    # 1) Does a matching domain already exist?
-    sql_get = raw"""
-        SELECT domain_id
-        FROM domains
-        WHERE name = $1
-          AND ( ($2::text IS NULL AND uri IS NULL) OR uri = $2 )
-        LIMIT 1;
-    """
-    stmt_get = DBInterface.prepare(db, sql_get)
-    df = DBInterface.execute(stmt_get, (domain.name, domain.uri)) |> DataFrame
-
-    if nrow(df) == 0
-        @info "Insert new domain: $(domain.name) with URI '$(domain.uri)'"
-        sql_ins = raw"""
-            INSERT INTO domains (name, uri, description)
-            VALUES ($1, $2, $3)
-            RETURNING domain_id;
-        """
-        stmt_ins = DBInterface.prepare(db, sql_ins)
-        ins = DBInterface.execute(stmt_ins, (domain.name, domain.uri, domain.description)) |> DataFrame
-        domain.domain_id = ins[1, :domain_id]
-    else
-        @info "Update existing domain: $(domain.name) with URI '$(domain.uri)'"
-        domain.domain_id = df[1, :domain_id]
-        sql_upd = raw"""
-            UPDATE domains
-               SET description = $3
-             WHERE domain_id   = $4
-             RETURNING domain_id;
-        """
-        stmt_upd = DBInterface.prepare(db, sql_upd)
-        DBInterface.execute(stmt_upd, (domain.name, domain.uri, domain.description, domain.domain_id))
-    end
-
-    return domain
-end
-# Get a domain by name (and optional URI), returns Domain or nothing
-"""
-    get_domain(store::DataStore, name::AbstractString; uri::Union{Nothing,String}=nothing)::Union{Domain,Nothing}
-
-Return a Domain object by its name (and optional URI) in the specified DataStore.
-"""
-function get_domain(store::DataStore, name::AbstractString; uri::Union{Nothing,String}=nothing)::Union{Domain,Nothing}
-    db = store.store
-    if isnothing(uri)
-        sql = raw"""
-            SELECT domain_id, name, uri, description
-              FROM domains
-             WHERE name = $1
-             LIMIT 1;
-            """
-    else
-        sql = raw"""
-            SELECT domain_id, name, uri, description
-              FROM domains
-             WHERE name = $1
-               AND uri = $2 
-             LIMIT 1;
-            """
-    end
-    stmt = DBInterface.prepare(db, sql)
-    if isnothing(uri)
-        df = DBInterface.execute(stmt, (name,)) |> DataFrame
-    else
-        df = DBInterface.execute(stmt, (name, uri)) |> DataFrame
-    end
-    if nrow(df) == 0
-        @info "No domain found with name: $(name) and URI: $(uri)"
-        return nothing
-    end
-    row = df[1, :]
-    return Domain(
-        domain_id=row.domain_id,
-        name=row.name,
-        uri=coalesce(row.uri, missing),
-        description=coalesce(row.description, missing)
-    )
-end
-
-"""
-    upsert_entity!(store::DataStore, e::Entity)::Entity
-
-Create or update an entity record. If an entity with the same (domain_id, name) already exists, it updates and returns its entity_id.
-"""
-function upsert_entity!(e::Entity, store::DataStore)::Entity
-    conn = store.store
-    if e.entity_id === nothing
-        @info "Inserting new entity: $(e.name) in domain ID $(e.domain_id)"
-        sql = raw"""
-            INSERT INTO entities (domain_id, name, description, ontology_namespace, ontology_class)
-            VALUES ($1,$2,$3,$4,$5)
-            ON CONFLICT (domain_id, name) DO UPDATE
-              SET description = EXCLUDED.description,
-                  ontology_namespace = EXCLUDED.ontology_namespace,
-                  ontology_class = EXCLUDED.ontology_class
-            RETURNING entity_id, uuid;
-        """
-        df = DBInterface.execute(DBInterface.prepare(conn, sql),
-            (e.domain_id, e.name, e.description, e.ontology_namespace, e.ontology_class)) |> DataFrame
-        @info "Rows affected: $(nrow(df))"
-        e.entity_id = df[1, :entity_id]
-        e.uuid = UUID(df[1, :uuid])
-    else
-        sql = raw"""
-            UPDATE entities
-               SET domain_id = $2,
-                   name = $3,
-                   description = $4,
-                   ontology_namespace = $5,
-                   ontology_class = $6
-             WHERE entity_id = $1
-             RETURNING uuid;
-        """
-        df = DBInterface.execute(DBInterface.prepare(conn, sql),
-            (e.entity_id, e.domain_id, e.name, e.description, e.ontology_namespace, e.ontology_class)) |> DataFrame
-        e.uuid = UUID(df[1, :uuid])
-    end
-    return e
-end
-
-"""
-    upsert_entityrelation!(store::DataStore, r::EntityRelation)::EntityRelation
-
-Create or update an entity relation record. If a relation with the same (domain_id, name) already exists, it updates and returns its entityrelation_id.
-"""
-function upsert_entityrelation!(r::EntityRelation, store::DataStore)::EntityRelation
-    conn = store.store
-    if r.entityrelation_id === nothing
-        sql = raw"""
-            INSERT INTO entityrelations
-              (entity_id_1, entity_id_2, domain_id, name, description, ontology_namespace, ontology_class)
-            VALUES ($1,$2,$3,$4,$5,$6,$7)
-            ON CONFLICT (domain_id, name) DO UPDATE
-              SET description = EXCLUDED.description,
-                  ontology_namespace = EXCLUDED.ontology_namespace,
-                  ontology_class = EXCLUDED.ontology_class
-            RETURNING entityrelation_id, uuid;
-        """
-        df = DBInterface.execute(DBInterface.prepare(conn, sql),
-            (r.entity_id_1, r.entity_id_2, r.domain_id, r.name, r.description, r.ontology_namespace, r.ontology_class)) |> DataFrame
-        r.entityrelation_id = df[1, :entityrelation_id]
-        r.uuid = UUID(df[1, :uuid])
-    else
-        sql = raw"""
-            UPDATE entityrelations
-               SET entity_id_1 = $2,
-                   entity_id_2 = $3,
-                   domain_id = $4,
-                   name = $5,
-                   description = $6,
-                   ontology_namespace = $7,
-                   ontology_class = $8
-             WHERE entityrelation_id = $1
-             RETURNING uuid;
-        """
-        df = DBInterface.execute(DBInterface.prepare(conn, sql),
-            (r.entityrelation_id, r.entity_id_1, r.entity_id_2, r.domain_id, r.name, r.description, r.ontology_namespace, r.ontology_class)) |> DataFrame
-        r.uuid = UUID(df[1, :uuid])
-    end
-    return r
-end
-"""
-    get_entity(store::DataStore, domain_id::Int, name::String)::Union{Entity,Nothing}
-
-Return an Entity object by its name in the specified domain.
-"""
-function get_entity(store::DataStore, domain_id::Int, name::String)::Union{Entity,Nothing}
-    conn = store.store
-    sql = raw"""
-        SELECT entity_id, domain_id, uuid, name, description, ontology_namespace, ontology_class
-          FROM entities
-         WHERE domain_id = $1 AND name = $2
-         LIMIT 1;
-    """
-    df = DBInterface.execute(DBInterface.prepare(conn, sql), (domain_id, name)) |> DataFrame
-    if nrow(df) == 0
-        return nothing
-    end
-    row = df[1, :]
-    return Entity(entity_id=row.entity_id,
-        domain_id=row.domain_id,
-        uuid=UUID(row.uuid),
-        name=row.name,
-        description=coalesce(row.description, missing),
-        ontology_namespace=coalesce(row.ontology_namespace, missing),
-        ontology_class=coalesce(row.ontology_class, missing))
-end
-
-"""
-    get_entityrelation!(store::DataStore, domain_id::Int, name::String)::Union{EntityRelation,Nothing}
-
-Return an EntityRelation object by its name in the specified domain.
-"""
-function get_entityrelation!(store::DataStore, domain_id::Int, name::String)::Union{EntityRelation,Nothing}
-    conn = store.store
-    sql = raw"""
-        SELECT entityrelation_id, entity_id_1, entity_id_2, domain_id, uuid, name,
-               description, ontology_namespace, ontology_class
-          FROM entityrelations
-         WHERE domain_id = $1 AND name = $2
-         LIMIT 1;
-    """
-    df = DBInterface.execute(DBInterface.prepare(conn, sql), (domain_id, name)) |> DataFrame
-    if nrow(df) == 0
-        return nothing
-    end
-    row = df[1, :]
-    return EntityRelation(
-        entityrelation_id=row.entityrelation_id,
-        entity_id_1=row.entity_id_1,
-        entity_id_2=row.entity_id_2,
-        domain_id=row.domain_id,
-        uuid=UUID(row.uuid),
-        name=row.name,
-        description=coalesce(row.description, missing),
-        ontology_namespace=coalesce(row.ontology_namespace, missing),
-        ontology_class=coalesce(row.ontology_class, missing)
-    )
-end
-function list_domainentities(store::DataStore, domain_id::Int)::DataFrame
-    conn = store.store
-    sql = raw"""
-        SELECT * FROM entities
-        WHERE domain_id = $1
-        ORDER BY name;
-    """
-    df = DBInterface.execute(DBInterface.prepare(conn, sql), (domain_id,)) |> DataFrame
-    return df
-end
-function list_domainrelations(store::DataStore, domain_id::Int)::DataFrame
-    conn = store.store
-    sql = raw"""
-        SELECT * FROM entityrelations
-        WHERE domain_id = $1
-        ORDER BY name;
-    """
-    df = DBInterface.execute(DBInterface.prepare(conn, sql), (domain_id,)) |> DataFrame
-    return df
-end
-"""
     lookup_variables(db, variable_names, domain)
 
 Returns a DataFrame with dataset variable names and ids
@@ -510,34 +233,13 @@ function lookup_variables(db, variable_names, domain)
     variables = selectdataframe(db, "variables", ["name", "variable_id", "value_type_id"], ["domain_id"], [domain]) |> DataFrame
     return innerjoin(variables, names, on=:name) #just the variables in this dataset
 end
-
-"""
-    datasetlakename(dataset_id::Integer):: String
-
-Return the name of the dataset in the data lake, based on dataset_id
-This is used to store the dataset in the data lake.
-"""
-datasetlakename(dataset_id::Integer)::String = "dataset_$dataset_id"
-"""
-    convert_missing_to_string!(df::DataFrame)
-
-If the column type is Missing, convert the column eltype to Union{String, Missing}.
-"""
-function convert_missing_to_string!(df::DataFrame)
-    for name in names(df)
-        if eltype(df[!, name]) == Missing
-            df[!, name] = convert(Vector{Union{String,Missing}}, df[!, name])
-        end
-    end
-    return nothing
-end
 """
     savedataframetolake(lake::DBInterface.Connection, df::AbstractDataFrame, name::String, description::String)
 
 Save dataframe to data lake, convert columns of type Missing to Union{String, Missing} for DuckDB compatibility
 NOTE: This function assumes that the ducklake metadatabase is attached as "tre_lake"
 """
-function savedataframetolake(lake::DBInterface.Connection, df::AbstractDataFrame, name::String, description::String)
+function savedataframetolake(store::DataStore, df::AbstractDataFrame, name::String, description::String)
     # Save dataframe to data lake
     # @info df
     # @info describe
@@ -608,7 +310,58 @@ Returns an array of lines in `str`
 """
 lines(str) = split(str, '\n')
 
+"""
+    get_datasetmetadata(store::DataStore, asset_id::UUID, version_id::UUID = nothing)::DataSet
 
+Get the metadata of a dataset from the datastore. 
+If `version_id` is provided, it retrieves the metadata for that specific version, otherwise it retrieves the latest version.
+- `store`: The DataStore object containing connection details for the datastore.
+- `asset_id`: The UUID of the asset representing the dataset.
+- `version_id`: The UUID of the specific version of the dataset (optional). If not provided, it retrieves the latest version.
+"""
+function get_datasetmetadata(store::DataStore, asset_id::UUID, version_id::UUID=nothing)::DataSet
+    db = store.store
+    if isnothing(db)
+        error("No datastore connection available. Please provide a valid PostgreSQL connection for the DataStore.")
+    end
+
+    # Prepare SQL query to get dataset metadata
+    sql = """
+    SELECT
+        av.asset_id,
+        av.version_id,
+        v.variable_id,
+        v.name AS variable_name,
+        v.value_type_id
+    FROM asset_versions av
+      JOIN assets a ON av.asset_id = a.asset_id
+      JOIN variables v ON a.asset_id = v.asset_id
+    WHERE a.asset_id = @asset_id
+    """
+
+    if !isnothing(version_id)
+        sql *= " AND av.version_id = @version_id"
+    else
+        sql *= " AND av.is_latest = true"
+    end
+
+    stmt = DBInterface.prepare(db, sql)
+    result = DBInterface.execute(stmt, (asset_id=asset_id, version_id=version_id)) |> DataFrame
+    # Set version_id to the first version_id in the result if not provided
+    if isnothing(version_id) && nrow(result) > 0
+        version_id = result[1, :version_id]
+    end
+    # Create DataSet object and populate it with variables
+    dataset = DataSet()
+    dataset.assetversion = AssetVersion(asset=Asset(asset_id=asset_id), version_id=version_id)
+
+    for row in eachrow(result)
+        variable = Variable(variable_id=row.variable_id, name=row.variable_name, value_type_id=row.value_type_id)
+        push!(dataset.variables, variable)
+    end
+
+    return dataset
+end
 """
 Export dataset 
 """
@@ -616,46 +369,23 @@ Export dataset
 """
     dataset_to_dataframe(db::DBInterface.Connection, dataset::Integer, lake::DBInterface.Connection = nothing)::AbstractDataFrame
 
-Return a dataset with id `dataset` as a DataFrame in the wide format,
-if lake is not specified, the data is read from the `data` table, otherwise from the data lake.
+Return a dataset with id `dataset` as a DataFrame 
+- 
 """
-function dataset_to_dataframe(db::DBInterface.Connection, dataset::Integer, lake::DBInterface.Connection=nothing)::AbstractDataFrame
-    # Check if dataset is in the data lake
-    inlake = !isnothing(lake)
-    if inlake
-        ds = selectdataframe(db, "datasets", ["dataset_id", "name", "in_lake"], ["dataset_id"], [dataset]) |> DataFrame
-        @info ds
-        if nrow(ds) == 0
-            error("Dataset with id $dataset not found in database.")
-        end
-        inlake = ds[1, :in_lake] == 1
-        if inlake
-            @info "Dataset $dataset is in the data lake."
-            sql = "SELECT * FROM tre_lake.$(datasetlakename(dataset));"
-            df = DBInterface.execute(lake, sql) |> DataFrame
-            return df
-        end
+function dataset_to_dataframe(store::DataStore, dataset::Integer)::AbstractDataFrame
+    db = store.lake
+    if isnothing(db)
+        error("No data lake connection available. Please provide a valid DuckDB connection for the DataStore.")
     end
     sql = """
-    SELECT
-        d.row_id,
-        v.name variable,
-        d.value
-    FROM data d
-      JOIN datarows r ON d.row_id = r.row_id
-      JOIN variables v ON d.variable_id = v.variable_id
-    WHERE r.dataset_id = @dataset;
     """
-    stmt = DBInterface.prepare(db, sql)
-    long = DBInterface.execute(stmt, (dataset = dataset)) |> DataFrame
-    return unstack(long, :row_id, :variable, :value)
 end
 """
     dataset_variables(db::DBInterface.Connection, dataset)::AbstractDataFrame
 
 Return the list of variables in a dataset
 """
-function dataset_variables(db::DBInterface.Connection, dataset)::AbstractDataFrame
+function dataset_variables(db::DBInterface.Connection, dataset:DataSet)::AbstractDataFrame
     sql = """
     SELECT
         v.variable_id,
@@ -700,69 +430,6 @@ function dataset_to_csv(db, dataset_id, datapath, compress=false, lake::DuckDB.C
         CSV.write(joinpath(outputdir, "$(get_datasetname(db,dataset_id)).csv"), df)
     end
 end
-
-
-"""
-    dataset_column(db::DBInterface.Connection, dataset_id::Integer, variable_id::Integer, variable_name::String)::AbstractDataFrame
-
-Return one column of data in a dataset (representing a variable)
-"""
-function dataset_column(db::DBInterface.Connection, dataset_id::Integer, variable_id::Integer, variable_name::String)::AbstractDataFrame
-    sql = """
-    SELECT
-        d.row_id,
-        d.value as $variable_name
-    FROM data d
-      JOIN datarows r ON d.row_id = r.row_id
-    WHERE r.dataset_id = @dataset_id
-      AND d.variable_id = @variable_id;
-    """
-    stmt = DBInterface.prepare(db, sql)
-    return DBInterface.execute(stmt, (dataset_id=dataset_id, variable_id=variable_id)) |> DataFrame
-end
-
-"""
-    get_datasetname(db::DBInterface.Connection, dataset)
-
-Return dataset name, given the `dataset_id`
-"""
-function get_datasetname(db::DBInterface.Connection, dataset)
-    sql = """
-    SELECT
-      name
-    FROM datasets
-    WHERE dataset_id = @dataset
-    """
-    stmt = DBInterface.prepare(db, sql)
-    result = DBInterface.execute(stmt, (dataset = dataset))
-    if isempty(result)
-        return missing
-    else
-        df = DataFrame(result)
-        name, ext = splitext(df[1, :name])
-        return name # Return name without extension
-    end
-end
-"""
-    blake3_digest_hex(path::AbstractString) -> String
-
-Computes the BLAKE3 digest of a file and returns it as a hexadecimal string.
-"""
-function blake3_digest_hex(path::AbstractString)::String
-    open(path, "r") do io
-        digest_bytes = blake3sum(io)
-        return lowercase(bytes2hex(digest_bytes))
-    end
-end
-"""
-    verify_blake3_digest(path::AbstractString, expected_hex::AbstractString) -> Bool
-
-Checks whether the BLAKE3 digest of the file matches the expected hex digest.
-"""
-function verify_blake3_digest(path::AbstractString, expected_hex::AbstractString)
-    digest = blake3_digest_hex(path)
-    return lowercase(digest) == lowercase(expected_hex)
-end
 """
     ingest_redcap_project(api_url::AbstractString, api_token::AbstractString, study::Study, domain::Domain)
 
@@ -787,44 +454,66 @@ function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_to
     @info "Downloaded REDCap EAV export to: $path"
     datafile = attach_datafile(store, study, "REDCap EAV Export for $(study.name)", path, "http://edamontology.org/format_3752"; compress=true)
     @info "Attached data file: $(datafile.storage_uri) with digest $(datafile.digest)"
-    #TODO: Create an ingest transformation to record this ingestion
+    #Create an ingest transformation to record this ingestion
+    commit = git_commit_info()
+    transformation = Transformation(
+        transformation_type="ingest",
+        description="Ingested REDCap project records for study: $(study.name) using AHRI_TRE ingest_redcap_project function",
+        repository_url=commit.repository_url,
+        commit_hash=commit.commit_hash,
+        file_path=commit.file_path
+    )
+    # Save the transformation to the datastore
+    save_transformation!(store, transformation)
+    @info "Created transformation with ID: $(transformation.transformation_id)"
+    # Add the data file as an output to the transformation
+    add_transformation_output!(store, transformation.transformation_id, datafile.assetversion.version_id)
     return nothing
 end
 """
-    create_asset(store::DataStore, study::Study, name::String, type::String, description::Union{Missing,String}=missing)::Asset
+    prepare_datafile(file_path::AbstractString, edam_format::String; compress::Bool=false, encrypt::Bool=false) -> DataFile
 
-Create a new asset in the TRE datastore and the base version of the asset.
-- `store`: The DataStore object containing connection details for the datastore.
-- `study`: The Study object to associate with the asset.
-- `name`: The name of the asset.
-- `type`: The type of the asset, either "dataset" or "file".
-- `description`: An optional description of the asset (default is missing).
-Returns the created Asset object with its asset_id and the first version.
+Prepare a DataFile for registration: validate path, optionally compress, compute digest and populate DataFile fields.
 """
-function create_asset(store::DataStore, study::Study, name::String, type::String, description::Union{Missing,String}=missing)::Asset
-    asset = Asset(study=study, name=name, description=description, type=type)
-    db = store.store
-    sql = raw"""
-        INSERT INTO assets (study_id, name, description, type)
-        VALUES ($1, $2, $3, $4)
-        RETURNING asset_id;
-    """
-    stmt = DBInterface.prepare(db, sql)
-    df = DBInterface.execute(stmt, (asset.study.study_id, asset.name, asset.description, asset.asset_type)) |> DataFrame
-    asset.asset_id = UUID(df[1, :asset_id])
-    # Create the first version of the asset
-    version = AssetVersion(asset=asset, major=1, minor=0, patch=0, note="Initial version", is_latest=true)
-    sql_version = raw"""
-        INSERT INTO asset_versions (asset_id, major, minor, patch, note, is_latest)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING version_id;
-    """
-    stmt_version = DBInterface.prepare(db, sql_version)
-    df_version = DBInterface.execute(stmt_version, (asset.asset_id, version.major, version.minor, version.patch, version.note, version.is_latest)) |> DataFrame
-    version.version_id = UUID(df_version[1, :version_id])
-    push!(asset.versions, version)
-    return asset
+function prepare_datafile(file_path::AbstractString, edam_format::String; compress::Bool=false, encrypt::Bool=false)::DataFile
+    if encrypt
+        throw(ErrorException("Encryption is not currently implemented."))
+    end
+    if !isfile(file_path)
+        throw(ArgumentError("File does not exist: $file_path"))
+    end
+
+    datafile = DataFile(
+        storage_uri=path_to_file_uri(file_path),
+        edam_format=edam_format,
+        encrypted=encrypt,
+        compressed=compress
+    )
+
+    if compress
+        compressed_path = string(file_path, ".zst")
+        if !isfile(compressed_path)
+            open(file_path, "r") do infile
+                open(ZstdCompressorStream, compressed_path, "w") do outfile
+                    write(outfile, read(infile))
+                end
+            end
+            datafile.storage_uri = path_to_file_uri(compressed_path)
+            datafile.compression_algorithm = "zstd"
+            @info "Compressed file created: $compressed_path"
+            rm(file_path; force=true)
+            file_path = compressed_path
+        else
+            throw(ArgumentError("Compressed file already exists: $compressed_path"))
+        end
+    end
+
+    datafile.digest = blake3_digest_hex(file_path)
+    @info "File digest: $(datafile.digest)"
+
+    return datafile
 end
+
 """
     attach_datafile(store::DataStore, study::Study, file_path::AbstractString, edam_format::String; compress::Bool=false, encrypt::Bool=false)::DataFile
 
@@ -839,136 +528,71 @@ Attach a data file that is already in the data lake to the TRE datastore.
 This function does not copy the file, it only registers it in the TRE datastore.
 It assumes the file is already in the data lake and creates an Asset object with a base version
 """
-function attach_datafile(store::DataStore, study::Study, asset_name::String, file_path::AbstractString, edam_format::String;
-    description::Union{String,Missing}=missing, compress::Bool=false, encrypt::Bool=false)::DataFile
-    # Throw not implemented error if encrypt is true
-    if encrypt
-        throw(ErrorException("Encryption is not currently implemented."))
-    end
-    # Ensure the file exists
-    if !isfile(file_path)
-        throw(ArgumentError("File does not exist: $file_path"))
-    end
-    datafile = DataFile(
-        storage_uri=path_to_file_uri(file_path),
-        edam_format=edam_format,
-        encrypt=encrypt,
-        compress=compress
-    )
-    # If compress is true, compress the file
-    if compress
-        compressed_path = file_path * ".zst"
-        if !isfile(compressed_path)
-            open(file_path, "r") do infile
-                open(ZstdCompressorStream, compressed_path, "w") do outfile
-                    write(outfile, infile)
-                end
-            end
-            datafile.storage_uri = path_to_file_uri(compressed_path)  # Update to the compressed file path
-            datafile.compression_algorithm = "zstd"
-            @info "Compressed file created: $compressed_path"
-            # Delete the original file if compression was successful
-            rm(file_path; force=true)
-            file_path = compressed_path  # Update to the compressed file path
-        else
-            throw(ArgumentError("Compressed file already exists: $compressed_path"))
-        end
-    end
-    # Obtain Blake3 file digest
-    datafile.digest = blake3_digest_hex(file_path)
-    @info "File digest: $(datafile.digest)"
+function attach_datafile(store::DataStore, study::Study, asset_name::String, description::Union{String,Missing}=missing, 
+    file_path::AbstractString, edam_format::String; compress::Bool=false, encrypt::Bool=false)::DataFile
+    datafile = prepare_datafile(file_path, edam_format; compress=compress, encrypt=encrypt)
     # Create the Asset object
     asset = create_asset(store, study, asset_name, "file", description)
     datafile.assetversion = asset.versions[1]  # Use the base version of the asset
     # Add the datafile to the datastore
-    db = store.store
-    sql = raw"""
-        INSERT INTO datafiles (datafile_id, compressed, encrypted, compression_algorithm, storage_uri, edam_format, digest)
-        VALUES ($1, $2, $3, $4, $5, $6, $7);
-    """
-    stmt = DBInterface.prepare(db, sql)
-    DBInterface.execute(stmt, (datafile.assetversion.version_id, compressed, encrypted, datafile.compression_algorithm,
-        datafile.storage_uri, datafile.edam_format, datafile.digest))
+    register_datafile(store.store, datafile)
+    @info "Registered data file for asset: $(asset_name) with version ID: $(datafile.assetversion.version_id)"
+    # Return the DataFile object
     return datafile
 end
-
-using URIs
-
 """
-    path_to_file_uri(path::AbstractString) -> String
+    attach_datafile(store::DataStore, assetversion::AssetVersion, file_path::AbstractString, edam_format::String;
+    compress::Bool=false, encrypt::Bool=false)::DataFile
 
-Convert a local filesystem path (Windows or Unix) to a `file://` URI.
-- Windows local path:   C:\\Users\\me\\file.txt   -> file:///C:/Users/me/file.txt
-- Windows UNC path:     \\\\srv\\share\\f.txt     -> file://srv/share/f.txt
-- Unix path:            /home/me/file.txt         -> file:///home/me/file.txt
+Attach a data file to an existing asset version in the TRE datastore.
+- `store`: The DataStore object containing connection details for the datastore.
+- `assetversion`: The AssetVersion object to which the data file will be attached.
+- `file_path`: The full path including the file name to the file.
+- `edam_format`: The EDAM format of the data file (e.g., "http://edamontology.org/format_3752" for a csv file).
+- `compress`: Whether the file should be compressed (default is false). 
+   If true, the file will be compressed using zstd, and the existing file will be replaced with the compressed version.
+- `encrypt`: Whether the file should be encrypted (default is false). **NOT currently implemented**
+This function does not copy the file, it only registers it in the TRE datastore.
+It assumes the file is already in the data lake and creates a DataFile object associated with the given asset version.
 """
-function path_to_file_uri(path::AbstractString)::String
-    abs_path = abspath(path)
-
-    if Sys.iswindows()
-        # UNC: \\server\share\path -> file://server/share/path
-        if startswith(abs_path, "\\\\")
-            # Split \\server\share\rest...
-            parts = split(abs_path[3:end], '\\'; limit=2)  # after leading "\\"
-            isempty(parts) && throw(ArgumentError("Invalid UNC path: $path"))
-            host = parts[1]
-            tail = length(parts) == 2 ? parts[2] : ""
-            # Build "file://host/<share/segments...>"
-            # Convert backslashes to forward slashes, then escape
-            tail_norm = replace(tail, '\\' => '/')
-            return "file://" * host * (isempty(tail_norm) ? "" : "/" * escapeuri(tail_norm))
-        else
-            # Local drive path: C:\Users\me -> file:///C:/Users/me
-            norm_path = replace(abs_path, '\\' => '/')
-            return "file:///" * escapeuri(norm_path)
-        end
-    else
-        # Unix-like
-        return "file://" * escapeuri(abs_path)  # abs_path already starts with "/"
-    end
+function attach_datafile(store::DataStore, assetversion::AssetVersion, file_path::AbstractString, edam_format::String;
+    compress::Bool=false, encrypt::Bool=false)::DataFile
+    datafile = prepare_datafile(file_path, edam_format; compress=compress, encrypt=encrypt)
+    datafile.assetversion = assetversion
+    # Add the datafile to the datastore
+    register_datafile(store.store, datafile)
+    @info "Registered data file for asset version: $(assetversion.version_id)"
+    # Return the DataFile object
+    return datafile
 end
-
-"""
-    file_uri_to_path(uri::AbstractString) -> String
-
-Convert a `file://` URI to a local filesystem path (Windows or Unix).
-Handles:
-- file:///C:/...        -> C:\\... (Windows)
-- file://server/share   -> \\\\server\\share (Windows UNC)
-- file:///home/me/...   -> /home/me/... (Unix)
-"""
-function file_uri_to_path(uri::AbstractString)::String
-    u = URI(uri)
-    u.scheme == "file" || throw(ArgumentError("Not a file:// URI"))
-
-    # Decode path portion (slashes still present)
-    decoded_path = unescapeuri(u.path)  # e.g., "/C:/Users/me", "/share/f.txt", "/home/me"
-
-    if Sys.iswindows()
-        if !isempty(u.host)
-            # UNC: file://server/share/dir/file -> \\server\share\dir\file
-            tail = decoded_path
-            # For UNC, u.path should start with "/share..." — drop the leading "/"
-            if startswith(tail, "/")
-                tail = tail[2:end]
-            end
-            return "\\\\" * u.host * "\\" * replace(tail, '/' => '\\')
-        else
-            # Local path: file:///C:/... (u.host empty, path like "/C:/...")
-            p = decoded_path
-            # Strip the single leading slash before the drive letter
-            if startswith(p, "/") && occursin(r"^[A-Za-z]:", p[2:end])
-                p = p[2:end]
-            end
-            return replace(p, '/' => '\\')
-        end
-    else
-        # Unix-like: host should be empty or "localhost"; treat both as local
-        return decoded_path
+function attach_new_datafile_version(store::DataStore, assetversion::AssetVersion, version_note::String,
+         file_path::AbstractString, edam_format::String, bumpmajor::Bool, bumpminor::Bool; 
+         compress::Bool=false, encrypt::Bool=false)::DataFile
+    # Prepare the new data file
+    datafile = prepare_datafile(file_path, edam_format; compress=compress, encrypt=encrypt)
+    if bumpmajor
+        assetversion.major += 1
+        assetversion.minor = 0
+        assetversion.patch = 0
+    elseif bumpminor
+        assetversion.minor += 1
+        assetversion.patch = 0
+    else # assume patch bump
+        assetversion.patch += 1
     end
+    assetversion.note = version_note
+    assetversion.is_latest = true # Set the new version as the latest
+    assetversion.version_id = nothing # Reset version_id to be generated by save_version!
+    save_version!(store, assetversion) # Save the updated version
+    datafile.assetversion = assetversion # Associate the data file with the new version
+    # Register the data file in the datastore
+    register_datafile(store.store, datafile)
+    @info "Registered new data file version for asset version: $(assetversion.version_id)"
+    # Return the DataFile object
+    return datafile
 end
-
 include("constants.jl")
+include("utils.jl")
 include("tredatabase.jl")
 include("redcap.jl")
 

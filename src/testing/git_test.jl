@@ -4,10 +4,11 @@ using Git
 
 dotenv()
 
-# Return (repo_url, commit) for the repo containing `dir` (default: this file’s dir)
+# Return (repo_url, commit, script_relpath) for the repo containing `dir` (default: this file’s dir)
 # - repo_url: normalized HTTPS URL if possible, else the raw remote URL; nothing if unavailable
 # - commit: short (7) or full 40-char hash; nothing if not in a git repo
-function git_commit_info(dir::AbstractString = @__DIR__; short::Bool = true)
+# - script_relpath: path to the script relative to the repo root (e.g. "src/testing/git_test.jl"); nothing if not in a git repo
+function git_commit_info(dir::AbstractString = @__DIR__; short::Bool = true, script_path::AbstractString = @__FILE__)
     # normalize ssh remotes to https
     _normalize_remote(url::AbstractString) = begin
         s = String(url)
@@ -23,7 +24,7 @@ function git_commit_info(dir::AbstractString = @__DIR__; short::Bool = true)
     root = try
         readchomp(`$(Git.git()) -C $(dir) rev-parse --show-toplevel`)
     catch
-        return (repo_url = nothing, commit = nothing)
+        return (repo_url = nothing, commit = nothing, script_relpath = nothing)
     end
 
     # Current commit hash
@@ -42,7 +43,14 @@ function git_commit_info(dir::AbstractString = @__DIR__; short::Bool = true)
         nothing
     end
 
-    return (repo_url = repo_url, commit = commit)
+    # Script relpath (relative to repo root)
+    script_relpath = try
+        relpath(abspath(script_path), root)
+    catch
+        nothing
+    end
+
+    return (repo_url = repo_url, commit = commit, script_relpath = script_relpath)
 end
 # ...existing code...
 # Example usage
@@ -50,6 +58,9 @@ info = git_commit_info()
 if info.repo_url !== nothing && info.commit !== nothing
     println("Repository URL: $(info.repo_url)")
     println("Commit: $(info.commit)")
+    if info.script_relpath !== nothing
+        println("Script: $(info.script_relpath)")
+    end
 else
     println("Not in a git repository.")
 end
