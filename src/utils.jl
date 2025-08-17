@@ -1,25 +1,24 @@
 """
-    blake3_digest_hex(path::AbstractString) -> String
+    sha256_digest_hex(path::AbstractString) -> String
 
-Computes the BLAKE3 digest of a file and returns it as a hexadecimal string.
-- 'path' is the path to the file for which the digest is computed.
+Compute the SHA-256 (SHA2-256) digest of a file and return it as a lowercase hex string.
+- `path`: Path to the file to hash.
 """
-function blake3_digest_hex(path::AbstractString)::String
+function sha256_digest_hex(path::AbstractString)::String
     open(path, "r") do io
-        digest_bytes = blake3sum(io)
+        digest_bytes = SHA.sha256(io)
         return lowercase(bytes2hex(digest_bytes))
     end
 end
-"""
-    verify_blake3_digest(path::AbstractString, expected_hex::AbstractString) -> Bool
 
-Checks whether the BLAKE3 digest of the file matches the expected hex digest.
-- 'path' is the path to the file for which the digest is computed.
-- 'expected_hex' is the expected hexadecimal digest string.
-Returns `true` if the computed digest matches the expected digest, `false` otherwise.
 """
-function verify_blake3_digest(path::AbstractString, expected_hex::AbstractString)
-    digest = blake3_digest_hex(path)
+    verify_sha256_digest(path::AbstractString, expected_hex::AbstractString) -> Bool
+
+Check whether the file's SHA-256 digest matches the expected hex string.
+Returns `true` on match, `false` otherwise.
+"""
+function verify_sha256_digest(path::AbstractString, expected_hex::AbstractString)
+    digest = sha256_digest_hex(path)
     return lowercase(digest) == lowercase(expected_hex)
 end
 """

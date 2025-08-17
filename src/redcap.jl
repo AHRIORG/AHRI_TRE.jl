@@ -1,3 +1,42 @@
+function retry_post(api_url, form; retry=5)::HTTP.Response
+    @info "Posting to REDCap API $(api_url) with form: $(form)"
+    resp = nothing
+    for attempt in 1:retry
+        try
+            resp = HTTP.post(api_url; headers=["Content-Type" => "application/x-www-form-urlencoded"], body=form)
+            @info "HTTP Status: $(resp.status)"
+            break
+        catch e
+            if attempt == retry
+                error("REDCap request failed after $(retry) attempts: $(e)")
+            end
+            @info "REDCap request failed (attempt $(attempt)/$(retry)): $(e)"
+            @info "Retrying in $(attempt) seconds..."
+            sleep(attempt)  # Incremental backoff
+        end
+    end
+    resp.status == 200 || error("REDCap post request failed $(resp.status): $(String(resp.body))")
+    return resp
+end
+function retry_streampost(api_url, headers, form, response_stream; retry=5)::HTTP.Response
+    @info "Posting to REDCap API $(api_url) with form: $(form)"
+    resp = nothing
+    for attempt in 1:retry
+        try
+            resp = HTTP.post(api_url; headers=headers, body=form, response_stream=response_stream)
+            break
+        catch e
+            if attempt == retry
+                error("REDCap request failed after $(retry) attempts: $(e)")
+            end
+            @info "REDCap request failed (attempt $(attempt)/$(retry)): $(e)"
+            @info "Retrying in $(attempt) seconds..."
+            sleep(attempt)  # Incremental backoff
+        end
+    end
+    resp.status == 200 || error("REDCap post request failed $(resp.status): $(String(resp.body))")
+    return resp
+end
 """
     redcap_post(body::Dict)::HTTP.Response
 
@@ -8,27 +47,14 @@ Do a POST request to the REDCap API with the given body.
 Returns the HTTP response object.
 """
 function redcap_post(api_url, body::AbstractDict; retry=5)::HTTP.Response
+    @info "Posting to REDCap API $(api_url) with body: $(body)"
     form = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k, v) in body], "&")
-    resp = nothing
-    for attempt in 1:retry
-        try
-            resp = HTTP.post(api_url; headers=["Content-Type" => "application/x-www-form-urlencoded"], body=form)
-            break
-        catch e
-            if attempt == retry
-                error("REDCap metadata request failed after $(retry) attempts: $(e)")
-            end
-            @info "REDCap metadata request failed (attempt $(attempt)/$(retry)): $(e)"
-            @info "Retrying in $(attempt) seconds..."
-            sleep(attempt)  # Incremental backoff
-        end
-    end
+    resp = retry_post(api_url, form; retry=retry)
     resp.status == 200 || error("REDCap post request failed $(resp.status): $(String(resp.body))")
-    @info "Response headers: $(resp.headers)"
     return resp
 end
 """
-    redcap_post(api_url, body::Dict, outputfile::String; decode::Bool=false, retry=5)::Bool
+    redcap_post_tofile(api_url, body::AbstractDict, outputfile::String; decode::Bool=false, retry=5)::Bool
 
 Do a POST request to the REDCap API with the given body and save the response to a file.
 - `api_url`: REDCap API URL
@@ -38,35 +64,25 @@ Do a POST request to the REDCap API with the given body and save the response to
 - `retry`: Number of retry attempts in case of failure (default: 5)
 Returns true if successful, false otherwise.
 """
-function redcap_post(api_url, body::AbstractDict, outputfile::String; decode::Bool=false, retry=5)::Bool
+function redcap_post_tofile(api_url, body::AbstractDict, outputfile::String; decode::Bool=false, retry=5)::Bool
+    @info "Posting to download file $(outputfile) from REDCap API $(api_url)"
     form = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k, v) in body], "&")
     headers = ["Content-Type" => "application/x-www-form-urlencoded"]  # add Accept if needed
     resp = nothing
-    for attempt in 1:retry
-        try
-            open(outputfile, "w") do rawio
-                if decode
-                    enc_out = StringEncoder(rawio, Encoding("UTF-8"), Encoding("ISO-8859-2"))
-                    try
-                        resp = HTTP.post(api_url; headers=headers, body=form, response_stream=enc_out)
-                    finally
-                        close(enc_out)  # flush encoder
-                    end
-                else
-                    resp = HTTP.post(api_url; headers=headers, body=form, response_stream=rawio)
-                end
-                # @info "HTTP Status: $(resp.status)"
-                return resp.status == 200
+    open(outputfile, "w") do rawio
+        if decode
+            enc_out = StringEncoder(rawio, Encoding("UTF-8"), Encoding("ISO-8859-2"))
+            try
+                resp = retry_streampost(api_url, headers, form, enc_out) #
+            finally
+                close(enc_out)  # flush encoder
             end
-        catch e
-            if attempt == retry
-                error("REDCap request failed after $(retry) attempts: $(e)")
-            end
-            @info "REDCap request failed (attempt $(attempt)/$(retry)): $(e)"
-            sleep(attempt)  # incremental backoff
+        else
+            resp = retry_streampost(api_url, headers, form, rawio) #HTTP.post(api_url; headers=headers, body=form, response_stream=rawio)
         end
     end
-    return false
+
+    return !isnothing(resp) && resp.status == 200
 end
 """
     redcap_metadata(url::AbstractString, token::AbstractString;
@@ -432,7 +448,7 @@ function redcap_fields(api_url::AbstractString, api_token::AbstractString;
         end
     end
 
-    resp = redcap_post(api_url, body)
+    resp = redcap_post(api_url, body; retry=retry)
     md = JSON3.read(String(resp.body))
     nondata = Set(["descriptive", "file", "sql", "signature"])  # commonly non-data fields
     names = String[]
@@ -470,7 +486,7 @@ function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; f
     outpath = joinpath(out_dir, fname)
 
     f = isempty(fields) ? redcap_fields(api_url, api_token) : fields
-
+    @info "Exporting REDCap fields: $(join(f, ", "))"
     body = OrderedDict(
         "token" => api_token,
         "content" => "record",
@@ -490,7 +506,8 @@ function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; f
             body["fields[$(i-1)]"] = f
         end
     end
-    if !redcap_post(api_url, body, outpath; decode = decode) 
+    flag = redcap_post_tofile(api_url, body, outpath; decode=decode)
+    if !flag
         error("Failed to export REDCap data to $(outpath)")
     end
 

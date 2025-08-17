@@ -557,7 +557,7 @@ function createassets(conn::DBInterface.Connection)
         doi VARCHAR(255) NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         created_by VARCHAR(255) DEFAULT CURRENT_USER,
-        FOREIGN KEY (asset_id) REFERENCES assets(asset_id),
+        FOREIGN KEY (asset_id) REFERENCES assets(asset_id) ON DELETE CASCADE,
         UNIQUE(asset_id, major, minor, patch)
     );
     COMMENT ON TABLE asset_versions IS 'Used to track different versions of assets';
@@ -659,7 +659,7 @@ function createassets(conn::DBInterface.Connection)
     COMMENT ON COLUMN datafiles.salt IS 'Salt used for encryption, if encrypted';
     COMMENT ON COLUMN datafiles.storage_uri IS 'URI to the file in the data lake, e.g. s3://bucket/path/to/file or file:///path/to/file';
     COMMENT ON COLUMN datafiles.edam_format IS 'EDAM format identifier, e.g. EDAM:format_1234, see: https://edamontology.org/EDAM:format_1234';
-    COMMENT ON COLUMN datafiles.digest IS 'BLAKE3 digest hex string';
+    COMMENT ON COLUMN datafiles.digest IS 'SHA-256 digest hex string';
     """
     DBInterface.execute(conn, sql)
     @info "Created datafiles table"
@@ -1409,10 +1409,10 @@ Create a new asset in the TRE datastore and the base version of the asset.
 Returns the created Asset object with its asset_id and the first version.
 """
 function create_asset(store::DataStore, study::Study, name::String, type::String, description::Union{Missing,String}=missing)::Asset
-    asset = Asset(study=study, name=name, description=description, type=type)
+    asset = Asset(study=study, name=name, description=description, asset_type=type)
     db = store.store
     sql = raw"""
-        INSERT INTO assets (study_id, name, description, type)
+        INSERT INTO assets (study_id, name, description, asset_type)
         VALUES ($1, $2, $3, $4)
         RETURNING asset_id;
     """
@@ -1435,18 +1435,18 @@ function save_version!(store::DataStore, version::AssetVersion)::AssetVersion
     stmt = DBInterface.prepare(db, sql)
     df = DBInterface.execute(stmt, (version.asset.asset_id, version.major, version.minor,
         version.patch, version.note, version.is_latest, version.doi)) |> DataFrame
-    version.version_id = df[1, :version_id]
+    version.version_id = UUID(df[1, :version_id])
     return version
 end
 """
-    register_datafile(store::Datastore, datafile::DataFile)
+    register_datafile(store::DataStore, datafile::DataFile)
 
 Register a DataFile in the TRE datastore. The assetversion must already exist in the datastore.
 - `store`: The Datastore object containing connection details for the datastore.
 - `datafile`: The DataFile object to register, which must have a valid assetversion.
 This function will insert the datafile into the database and associate it with the specified asset version.
 """
-function register_datafile(store::Datastore, datafile::DataFile)
+function register_datafile(store::DataStore, datafile::DataFile)
     db = store.store
     sql = raw"""
         INSERT INTO datafiles (datafile_id, compressed, encrypted, compression_algorithm, storage_uri, edam_format, digest)

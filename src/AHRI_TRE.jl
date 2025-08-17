@@ -9,7 +9,7 @@ using Dates
 using Arrow
 using DataStructures
 using ODBC
-using Blake3Hash
+using SHA
 using CSV
 using XLSX
 using FileIO
@@ -59,7 +59,7 @@ Base.@kwdef mutable struct Study <: AbstractStudy
     name::String = "study_name"
     description::String = "study description"
     external_id::String = "external_id"
-    study_type_id::Integer = 1
+    study_type_id::Int = 1
 end
 
 Base.@kwdef mutable struct Domain
@@ -160,7 +160,7 @@ Base.@kwdef mutable struct DataSet
 end
 
 Base.@kwdef mutable struct Transformation
-    transformation_id::Union{Integer,Nothing} = nothing
+    transformation_id::Union{Int,Nothing} = nothing
     transformation_type::String = "transform" # "ingest", "transform", "entity", "export"
     description::String
     repository_url::Union{String,Nothing} = nothing
@@ -171,18 +171,18 @@ Base.@kwdef mutable struct Transformation
 end
 #endregion
 """
-    createdatastore(store::DataStore; superuser::String="postgres", superpwd::String="", port::Integer=5432)
+    createdatastore(store::DataStore; superuser::String="postgres", superpwd::String="", port::Int=5432)
 
 Create or replace a PostgreSQL database for the TRE datastore, including the datalake if specified.
 This function creates a PostgreSQL database with the specified name and user credentials, and optionally creates a data lake using the DuckDb extension ducklake.
     store::DataStore: The DataStore object containing connection details for the datastore and datalake databases.
     superuser::String: The superuser name for PostgreSQL (default is "postgres").
     superpwd::String: The superuser password for PostgreSQL (default is empty).
-    port::Integer: The port number for the PostgreSQL server (default is 5432
+    port::Int: The port number for the PostgreSQL server (default is 5432
 NB: ONLY USE THIS FUNCTION IN DEVELOPMENT OR TESTING ENVIRONMENTS,
     as it will drop the existing database, lake and all its contents.
 """
-function createdatastore(store::DataStore; superuser::String="postgres", superpwd::String="", port::Integer=5432)
+function createdatastore(store::DataStore; superuser::String="postgres", superpwd::String="", port::Int=5432)
     maint = DBInterface.connect(LibPQ.Connection, "host=$(store.server) port=$(port) dbname=postgres user=$(superuser) password=$(superpwd)")
     try
         replace_database(maint, store.dbname, store.user, store.password)
@@ -289,11 +289,11 @@ end
 
 
 """
-    get_variable(db::DBInterface.Connection, variable_id::Integer)
+    get_variable(db::DBInterface.Connection, variable_id::Int)
 
 Returns the entry of variable with `variable_id`
 """
-function get_variable(db::DBInterface.Connection, variable_id::Integer)
+function get_variable(db::DBInterface.Connection, variable_id::Int)
     stmt = prepareselectstatement(db, "variables", ["*"], ["variable_id"])
     result = DBInterface.execute(stmt, [variable_id]) |> DataFrame
     if nrow(result) == 0
@@ -363,29 +363,11 @@ function get_datasetmetadata(store::DataStore, asset_id::UUID, version_id::UUID=
     return dataset
 end
 """
-Export dataset 
-"""
-
-"""
-    dataset_to_dataframe(db::DBInterface.Connection, dataset::Integer, lake::DBInterface.Connection = nothing)::AbstractDataFrame
-
-Return a dataset with id `dataset` as a DataFrame 
-- 
-"""
-function dataset_to_dataframe(store::DataStore, dataset::Integer)::AbstractDataFrame
-    db = store.lake
-    if isnothing(db)
-        error("No data lake connection available. Please provide a valid DuckDB connection for the DataStore.")
-    end
-    sql = """
-    """
-end
-"""
     dataset_variables(db::DBInterface.Connection, dataset)::AbstractDataFrame
 
 Return the list of variables in a dataset
 """
-function dataset_variables(db::DBInterface.Connection, dataset:DataSet)::AbstractDataFrame
+function dataset_variables(db::DBInterface.Connection, dataset::DataSet)::AbstractDataFrame
     sql = """
     SELECT
         v.variable_id,
@@ -455,19 +437,20 @@ function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_to
     datafile = attach_datafile(store, study, "REDCap EAV Export for $(study.name)", path, "http://edamontology.org/format_3752"; compress=true)
     @info "Attached data file: $(datafile.storage_uri) with digest $(datafile.digest)"
     #Create an ingest transformation to record this ingestion
-    commit = git_commit_info()
+    commit = git_commit_info(; script_path=@__FILE__)
     transformation = Transformation(
         transformation_type="ingest",
         description="Ingested REDCap project records for study: $(study.name) using AHRI_TRE ingest_redcap_project function",
-        repository_url=commit.repository_url,
-        commit_hash=commit.commit_hash,
-        file_path=commit.file_path
+        repository_url=commit.repo_url,
+        commit_hash=commit.commit,
+        file_path=commit.script_relpath
     )
     # Save the transformation to the datastore
     save_transformation!(store, transformation)
     @info "Created transformation with ID: $(transformation.transformation_id)"
     # Add the data file as an output to the transformation
-    add_transformation_output!(store, transformation.transformation_id, datafile.assetversion.version_id)
+    add_transformation_output(store, transformation.transformation_id, datafile.assetversion.version_id)
+    @info "Added transformation output"
     return nothing
 end
 """
@@ -508,14 +491,15 @@ function prepare_datafile(file_path::AbstractString, edam_format::String; compre
         end
     end
 
-    datafile.digest = blake3_digest_hex(file_path)
+    datafile.digest = sha256_digest_hex(file_path)
     @info "File digest: $(datafile.digest)"
 
     return datafile
 end
 
 """
-    attach_datafile(store::DataStore, study::Study, file_path::AbstractString, edam_format::String; compress::Bool=false, encrypt::Bool=false)::DataFile
+    attach_datafile(store::DataStore, study::Study, asset_name::String, 
+    file_path::AbstractString, edam_format::String, description::Union{String,Missing}=missing; compress::Bool=false, encrypt::Bool=false)::DataFile
 
 Attach a data file that is already in the data lake to the TRE datastore.
 - `store`: The DataStore object containing connection details for the datastore.
@@ -528,14 +512,14 @@ Attach a data file that is already in the data lake to the TRE datastore.
 This function does not copy the file, it only registers it in the TRE datastore.
 It assumes the file is already in the data lake and creates an Asset object with a base version
 """
-function attach_datafile(store::DataStore, study::Study, asset_name::String, description::Union{String,Missing}=missing, 
-    file_path::AbstractString, edam_format::String; compress::Bool=false, encrypt::Bool=false)::DataFile
+function attach_datafile(store::DataStore, study::Study, asset_name::String,
+    file_path::AbstractString, edam_format::String, description::Union{String,Missing}=missing; compress::Bool=false, encrypt::Bool=false)::DataFile
     datafile = prepare_datafile(file_path, edam_format; compress=compress, encrypt=encrypt)
     # Create the Asset object
     asset = create_asset(store, study, asset_name, "file", description)
     datafile.assetversion = asset.versions[1]  # Use the base version of the asset
     # Add the datafile to the datastore
-    register_datafile(store.store, datafile)
+    register_datafile(store, datafile)
     @info "Registered data file for asset: $(asset_name) with version ID: $(datafile.assetversion.version_id)"
     # Return the DataFile object
     return datafile
@@ -566,8 +550,8 @@ function attach_datafile(store::DataStore, assetversion::AssetVersion, file_path
     return datafile
 end
 function attach_new_datafile_version(store::DataStore, assetversion::AssetVersion, version_note::String,
-         file_path::AbstractString, edam_format::String, bumpmajor::Bool, bumpminor::Bool; 
-         compress::Bool=false, encrypt::Bool=false)::DataFile
+    file_path::AbstractString, edam_format::String, bumpmajor::Bool, bumpminor::Bool;
+    compress::Bool=false, encrypt::Bool=false)::DataFile
     # Prepare the new data file
     datafile = prepare_datafile(file_path, edam_format; compress=compress, encrypt=encrypt)
     if bumpmajor
