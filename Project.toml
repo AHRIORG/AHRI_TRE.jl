@@ -51,6 +51,7 @@ tectonic_jll = "d7dd28d6-a5e6-559c-9131-7eb760cdacc5"
 [compat]
 CodecZstd = "0.8.6"
 Downloads = "1.6.0"
+Git = "1.4.0"
 OpenSSL = "1.5.0"
 OrderedCollections = "1.8.1"
 StringEncodings = "0.3.7"
