@@ -432,7 +432,7 @@ function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_to
     register_redcap_datadictionary(store; domain_id=domain.domain_id, redcap_url=api_url, redcap_token=api_token, vocabulary_prefix=vocabulary_prefix)
     @info "Registered REDCap datadictionary for study: $(study.name) in domain: $(domain.name)"
     # Download REDCap records in EAV format
-    path = redcap_export_eav(api_url, api_token, forms=forms, fields=fields)
+    path = redcap_export_eav(api_url, api_token, forms=forms, fields=fields, decode=true)
     @info "Downloaded REDCap EAV export to: $path"
     datafile = attach_datafile(store, study, "REDCap EAV Export for $(study.name)", path, "http://edamontology.org/format_3752"; compress=true)
     @info "Attached data file: $(datafile.storage_uri) with digest $(datafile.digest)"
