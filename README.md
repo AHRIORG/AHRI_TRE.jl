@@ -1,7 +1,7 @@
 # AHRI Trusted Research Environment
 
-[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://kobusherbst.github.io/RDAIngest.jl/stable/)
-[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://kobusherbst.github.io/RDAIngest.jl/dev/)
+[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://kobusherbst.github.io/AHRI_TRE.jl/stable/)
+[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://kobusherbst.github.io/AHRI_TRE.jl/dev/)
 
 Julia code to manage the AHRI TRE
 
