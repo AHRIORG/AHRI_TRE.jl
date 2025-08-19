@@ -323,20 +323,29 @@ function upsert_variable!(db, domain_id::Int, name::String; value_type_id::Int, 
 end
 
 """
-    register_redcap_datadictionary(store::DataStore;
-        domain_id::Int, redcap_url::String, redcap_token::String,
-        dataset_id::Union{Nothing,UUID}=nothing, forms=nothing, vocabulary_prefix::String="") -> DataFrame
+    register_redcap_datadictionary(store::DataStore,
+    domain_id::Int, redcap_url::String, redcap_token::String;
+    forms=String[], vocabulary_prefix::String="", use_transaction = true)::DataFrame
 
-Returns a DataFrame mapping REDCap fields to (variable_id, value_type_id, vocabulary_id).
 Field types: "descriptive","sql","signature","file" are ignored.
 This function downloads the REDCap metadata, processes it, and registers variables in the given DataStore.
-    Database actions are wrapped in a transaction and rolled back on error.
+    Database actions are wrapped in a transaction and rolled back on error, if use_transaction = true (default).
+- `store`: DataStore instance to use for database operations
+- `domain_id`: Domain ID to register variables under
+- `redcap_url`: REDCap API URL
+- `redcap_token`: API token for the REDCap project
+- `forms`: Optional vector of form names to filter by (default: all forms)
+- `vocabulary_prefix`: Optional prefix for vocabulary names (default: empty)
+- `use_transaction`: If true (default), wrap database actions in a transaction
+Returns a DataFrame with columns: field_name, variable_id, value_type_id, vocabulary_id, field_type, validation, label, note.
 """
-function register_redcap_datadictionary(store::DataStore;
-    domain_id::Int, redcap_url::String, redcap_token::String,
-    forms=String[], vocabulary_prefix::String="")::DataFrame
+function register_redcap_datadictionary(store::DataStore,
+    domain_id::Int, redcap_url::String, redcap_token::String;
+    forms=String[], vocabulary_prefix::String="", use_transaction = true)::DataFrame
     db = store.store
-    DBInterface.execute(db, "BEGIN;")
+    if use_transaction 
+        transaction_begin(db)
+    end
     try
         md = redcap_metadata(redcap_url, redcap_token; forms=forms)
         @info "REDCap metadata downloaded: $(nrow(md)) fields"
@@ -377,12 +386,13 @@ function register_redcap_datadictionary(store::DataStore;
             first_row = false
             push!(out, (fname, variable_id, vtype_id, vocab_id, ftype, fvalid, flabel, fnote))
         end
-        DBInterface.execute(db, "COMMIT;")
+        if use_transaction
+            transaction_commit(db)
+        end
         return out
     catch e
-        try
-            DBInterface.execute(db, "ROLLBACK;")
-        catch
+        if use_transaction
+            transaction_rollback(db)
         end
         rethrow(e)
     end
@@ -402,7 +412,7 @@ function redcap_project_info(url::AbstractString, token::AbstractString; raw::Bo
         "format" => "json",
         "returnFormat" => "json"
     )
-    resp = redcap_post(url, body)
+    resp = retry_post(url, body)
     resp.status == 200 || error("REDCap project info error $(resp.status): $(String(resp.body))")
     obj = JSON3.read(String(resp.body))  # single JSON object
     raw && return obj
@@ -485,7 +495,7 @@ function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; f
     fname = string("redcap_records_", Dates.format(now(), "yyyymmdd_HHMMSS"), "_", uuid4(), ".csv")
     outpath = joinpath(out_dir, fname)
 
-    f = isempty(fields) ? redcap_fields(api_url, api_token) : fields
+    f = isempty(fields) ? redcap_fields(api_url, api_token) : fields #remove this once the eav export bug that returns nothing when the field list is empty, is fixed
     @info "Exporting REDCap fields: $(join(f, ", "))"
     body = OrderedDict(
         "token" => api_token,

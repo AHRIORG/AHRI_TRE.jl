@@ -136,12 +136,10 @@ try
     @info "Relations in domain 'APCC': $(join(relation_names, ", "))"
   end
   if do_variables
-    vars_map = register_redcap_datadictionary(datastore;
-      domain_id=get_domain(datastore, "APCC").domain_id,
-      redcap_url=ENV["REDCAP_API_URL"],
-      redcap_token=ENV["REDCAP_API_TOKEN"],
-      dataset_id=nothing,                 # or dataset UUID if you want to fill dataset_variables
-      forms=nothing,                      # or ["enrolment_form","visit_form"]
+    vars_map = register_redcap_datadictionary(datastore,
+      get_domain(datastore, "APCC").domain_id,
+      ENV["REDCAP_API_URL"],
+      ["REDCAP_API_TOKEN"],
       vocabulary_prefix="apcc"
     )
   end

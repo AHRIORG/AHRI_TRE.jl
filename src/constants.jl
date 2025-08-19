@@ -37,3 +37,10 @@ const _VT_DATETIME= TRE_TYPE_DATETIME
 const _VT_TIME    = TRE_TYPE_TIME
 const _VT_ENUM    = TRE_TYPE_CATEGORY
 const _VT_MULTIRESPONSE = TRE_TYPE_MULTIRESPONSE
+
+# NCName validation
+# Single-char predicates using Unicode properties.
+# StartChar: '_' or any Letter
+const _RE_START = r"^[_\p{L}]$"
+# NameChar: Letter, Number, combining marks, connector punct, letter modifiers, '-' or '.'
+const _RE_NAME  = r"^[\p{L}\p{N}\p{Mc}\p{Mn}\p{Pc}\p{Lm}\-\.]$"

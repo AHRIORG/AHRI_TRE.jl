@@ -166,3 +166,84 @@ function convert_missing_to_string!(df::DataFrame)
     end
     return nothing
 end
+#region NCName conversion
+_is_start_char(c::Char) = occursin(_RE_START, string(c))
+_is_name_char(c::Char)  = occursin(_RE_NAME,  string(c))
+
+"""
+    is_ncname(s::AbstractString) -> Bool
+
+Return true if `s` is a valid NCName (no colon, proper start char, allowed name chars).
+"""
+function is_ncname(s::AbstractString)
+    isempty(s) && return false
+    occursin(':', s) && return false
+    it = iterate(s); it === nothing && return false
+    (c, st) = it
+    _is_start_char(c) || return false
+    while true
+        it = iterate(s, st); it === nothing && break
+        (c, st) = it
+        _is_name_char(c) || return false
+    end
+    return true
+end
+
+"""
+    to_ncname(s::AbstractString; replacement="_", prefix="_", avoid_reserved=true) -> String
+
+Convert `s` into a valid NCName:
+
+- Replaces any invalid char with `replacement` (default `_`).
+- If the first char is invalid, prepends `prefix` (default `_`).
+- Removes/condenses repeated `replacement`s.
+- Replaces `:` with `replacement`.
+- Optionally avoids names starting with 'xml' (case-insensitive) by prepending `prefix`.
+"""
+function to_ncname(s::AbstractString; replacement="_", prefix="_", avoid_reserved::Bool=true)
+    t = strip(s)
+    # Replace colons outright
+    if !isempty(replacement)
+        t = replace(t, ':' => replacement)
+    else
+        t = replace(t, ":" => "")
+    end
+
+    # Build sanitized name
+    io = IOBuffer()
+    it = iterate(t)
+    if it === nothing
+        return prefix * "x"
+    end
+
+    (c, st) = it
+    if _is_start_char(c)
+        print(io, c)
+    else
+        print(io, prefix)
+        print(io, _is_name_char(c) ? c : replacement)
+    end
+
+    while true
+        it = iterate(t, st); it === nothing && break
+        (c, st) = it
+        print(io, _is_name_char(c) ? c : replacement)
+    end
+
+    out = String(take!(io))
+
+    # Collapse multiple replacements (e.g., "___" -> "_")
+    if !isempty(replacement)
+        rep = replace(replacement, r"([\\.^$|?*+()\[\]{}])" => s"\\\1")  # escape for Regex
+        out = replace(out, Regex("$(rep){2,}") => replacement)
+    end
+
+    # Ensure not empty and not starting with reserved 'xml' (if requested)
+    isempty(out) && (out = prefix * "x")
+    if avoid_reserved && startswith(lowercase(out), "xml")
+        out = prefix * out
+    end
+
+    return out
+end
+#endregion NCName conversion

@@ -243,7 +243,7 @@ function createstudies(conn::DBInterface.Connection)
         CONSTRAINT fk_sources_study_type_id FOREIGN KEY (study_type_id) REFERENCES study_types (study_type_id) ON DELETE CASCADE
     );
     COMMENT ON TABLE studies IS 'Studies table to record information about studies contributing data to the TRE';
-    COMMENT ON COLUMN studies.name IS 'Name of the study, must be unique';
+    COMMENT ON COLUMN studies.name IS 'Name of the study, must be unique. Keep it short - it will be used as the schema name in the DuckDB lake';
     COMMENT ON COLUMN studies.external_id IS 'External identifier for the study, e.g. from a registry or sponsor';
     COMMENT ON COLUMN studies.study_type_id IS 'Type of study, e.g. HDSS, Cohort, Survey, etc.';
     COMMENT ON COLUMN studies.created_by IS 'User who created the study record';
@@ -733,7 +733,7 @@ function createentities(conn::DBInterface.Connection)
     COMMENT ON TABLE entities IS 'Entities table to record entities such as individuals, households, etc. in the TRE and link them to public ontologies';
     COMMENT ON COLUMN entities.domain_id IS 'ID of the domain this entity belongs to';
     COMMENT ON COLUMN entities.uuid IS 'UUID of the entity, to ensure global uniqueness across domains';
-    COMMENT ON COLUMN entities.name IS 'Name of the entity, should be unique within the domain and comply with xsd:token definition';
+    COMMENT ON COLUMN entities.name IS 'Name of the entity, should be unique within the domain and comply with xsd:NCName definition';
     COMMENT ON COLUMN entities.ontology_namespace IS 'Optional namespace of the ontology for the entity, e.g. http://purl.obolibrary.org/obo/';
     COMMENT ON COLUMN entities.ontology_class IS 'Optional class identifier of the ontology for the entity, e.g. EFO_0000408';
     """
@@ -878,6 +878,25 @@ function createmapping(conn::DBInterface.Connection)
     return nothing
 end
 
+function transaction_begin(conn::DBInterface.Connection)
+    DBInterface.execute(conn, "BEGIN")
+    @info "Transaction started"
+    return nothing
+end
+function transaction_commit(conn::DBInterface.Connection)
+    DBInterface.execute(conn, "COMMIT")
+    @info "Transaction committed"
+    return nothing
+end
+function transaction_rollback(conn::DBInterface.Connection)
+    try
+        DBInterface.execute(conn, "ROLLBACK")
+        @info "Transaction rolled back"
+    catch rollback_err
+        @warn "Failed to rollback transaction: $rollback_err"
+    end
+    return nothing
+end
 """
     upsert_study!(study::Study, store::DataStore)::Study
 
@@ -1044,7 +1063,6 @@ function get_domain(store::DataStore, name::AbstractString; uri::Union{Nothing,S
         description=coalesce(row.description, missing)
     )
 end
-
 
 """
     upsert_entity!(store::DataStore, entity::Entity)::Entity
@@ -1403,12 +1421,17 @@ end
 Create a new asset in the TRE datastore and the base version of the asset.
 - `store`: The DataStore object containing connection details for the datastore.
 - `study`: The Study object to associate with the asset.
-- `name`: The name of the asset.
+- `name`: The name of the asset. Will be coherced to xsd:NCName format.
 - `type`: The type of the asset, either "dataset" or "file".
 - `description`: An optional description of the asset (default is missing).
 Returns the created Asset object with its asset_id and the first version.
 """
 function create_asset(store::DataStore, study::Study, name::String, type::String, description::Union{Missing,String}=missing)::Asset
+    if !is_ncname(name)
+        @info "Asset name '$name' must be a valid xsd:NCName format"
+        name = to_ncname(name)
+        @info "Coerced asset name to '$name'"
+    end
     asset = Asset(study=study, name=name, description=description, asset_type=type)
     db = store.store
     sql = raw"""

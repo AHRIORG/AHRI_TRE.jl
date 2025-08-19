@@ -429,28 +429,47 @@ Returns nothing.
 """
 function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_token::AbstractString, study::Study, domain::Domain;
     vocabulary_prefix::String="REDCap", forms::Vector{String}=String[], fields::Vector{String}=String[])
-    register_redcap_datadictionary(store; domain_id=domain.domain_id, redcap_url=api_url, redcap_token=api_token, vocabulary_prefix=vocabulary_prefix)
-    @info "Registered REDCap datadictionary for study: $(study.name) in domain: $(domain.name)"
-    # Download REDCap records in EAV format
-    path = redcap_export_eav(api_url, api_token, forms=forms, fields=fields, decode=true)
-    @info "Downloaded REDCap EAV export to: $path"
-    datafile = attach_datafile(store, study, "REDCap EAV Export for $(study.name)", path, "http://edamontology.org/format_3752"; compress=true)
-    @info "Attached data file: $(datafile.storage_uri) with digest $(datafile.digest)"
-    #Create an ingest transformation to record this ingestion
-    commit = git_commit_info(; script_path=@__FILE__)
-    transformation = Transformation(
-        transformation_type="ingest",
-        description="Ingested REDCap project records for study: $(study.name) using AHRI_TRE ingest_redcap_project function",
-        repository_url=commit.repo_url,
-        commit_hash=commit.commit,
-        file_path=commit.script_relpath
-    )
-    # Save the transformation to the datastore
-    save_transformation!(store, transformation)
-    @info "Created transformation with ID: $(transformation.transformation_id)"
-    # Add the data file as an output to the transformation
-    add_transformation_output(store, transformation.transformation_id, datafile.assetversion.version_id)
-    @info "Added transformation output"
+    conn = store.store
+    if isnothing(conn)
+        error("No datastore connection available. Please open datastore connection in DataStore.store before calling ingest_redcap_project.")
+    end
+
+    # Start transaction on the datastore
+    transaction_begin(conn)
+    try
+        register_redcap_datadictionary(store, domain.domain_id, api_url, api_token;
+        vocabulary_prefix=vocabulary_prefix, use_transaction=false)
+        @info "Registered REDCap datadictionary for study: $(study.name) in domain: $(domain.name)"
+        redcap_info = redcap_project_info(api_url, api_token)
+        # Download REDCap records in EAV format
+        path = redcap_export_eav(api_url, api_token, forms=forms, fields=fields, decode=true)
+        @info "Downloaded REDCap EAV export to: $path"
+        datafile = attach_datafile(store, study, "redcap_$(redcap_info.project_id)_eav", path, 
+                    "http://edamontology.org/format_3752"; description = "REDCap project $(redcap_info.project_id) EAV Export for $(redcap_info.project_title)",compress=true)
+        @info "Attached data file: $(datafile.storage_uri) with digest $(datafile.digest)"
+        #Create an ingest transformation to record this ingestion
+        commit = git_commit_info(; script_path=@__FILE__)
+        transformation = Transformation(
+            transformation_type="ingest",
+            description="Ingested REDCap project $(redcap_info.project_id) records for project: $(redcap_info.project_title) using AHRI_TRE ingest_redcap_project function",
+            repository_url=commit.repo_url,
+            commit_hash=commit.commit,
+            file_path=commit.script_relpath
+        )
+        # Save the transformation to the datastore
+        save_transformation!(store, transformation)
+        @info "Created transformation with ID: $(transformation.transformation_id)"
+        # Add the data file as an output to the transformation
+        add_transformation_output(store, transformation.transformation_id, datafile.assetversion.version_id)
+        @info "Added transformation output"
+
+        # Commit transaction
+        transaction_commit(conn)
+    catch e
+        # Attempt rollback, then rethrow original error
+        transaction_rollback(conn)
+        rethrow(e)
+    end
     return nothing
 end
 """
@@ -498,14 +517,16 @@ function prepare_datafile(file_path::AbstractString, edam_format::String; compre
 end
 
 """
-    attach_datafile(store::DataStore, study::Study, asset_name::String, 
-    file_path::AbstractString, edam_format::String, description::Union{String,Missing}=missing; compress::Bool=false, encrypt::Bool=false)::DataFile
+    attach_datafile(store::DataStore, study::Study, asset_name::String,
+    file_path::AbstractString, edam_format::String; description::Union{String,Missing}=missing, compress::Bool=false, encrypt::Bool=false)::DataFile
 
 Attach a data file that is already in the data lake to the TRE datastore.
 - `store`: The DataStore object containing connection details for the datastore.
 - `study`: The Study object to associate with the data file.
+- `asset_name`: The name of the asset to which the data file will be attached. Must comply with xsd:NCName restrictions.
 - `file_path`: The full path including the file name to the file.
 - `edam_format`: The EDAM format of the data file (e.g., "http://edamontology.org/format_3752" for a csv file).
+- `description`: A description of the data file (default is missing).
 - `compress`: Whether the file should be compressed (default is false). 
    If true, the file will be compressed using zstd, and the existing file will be replaced with the compressed version.
 - `encrypt`: Whether the file should be encrypted (default is false). **NOT currently implemented**
@@ -513,7 +534,7 @@ This function does not copy the file, it only registers it in the TRE datastore.
 It assumes the file is already in the data lake and creates an Asset object with a base version
 """
 function attach_datafile(store::DataStore, study::Study, asset_name::String,
-    file_path::AbstractString, edam_format::String, description::Union{String,Missing}=missing; compress::Bool=false, encrypt::Bool=false)::DataFile
+    file_path::AbstractString, edam_format::String; description::Union{String,Missing}=missing, compress::Bool=false, encrypt::Bool=false)::DataFile
     datafile = prepare_datafile(file_path, edam_format; compress=compress, encrypt=encrypt)
     # Create the Asset object
     asset = create_asset(store, study, asset_name, "file", description)
