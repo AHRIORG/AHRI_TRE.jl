@@ -481,9 +481,9 @@ end
 
 Add default value types
 """
-initvalue_types() = DataFrame([(value_type_id=TRE_TYPE_INTEGER, value_type="xsd:integer", description=""),
-    (value_type_id=TRE_TYPE_FLOAT, value_type="xsd:float", description=""),
-    (value_type_id=TRE_TYPE_STRING, value_type="xsd:string", description=""),
+initvalue_types() = DataFrame([(value_type_id=TRE_TYPE_INTEGER, value_type="xsd:integer", description="integer"),
+    (value_type_id=TRE_TYPE_FLOAT, value_type="xsd:float", description="float"),
+    (value_type_id=TRE_TYPE_STRING, value_type="xsd:string", description="string"),
     (value_type_id=TRE_TYPE_DATE, value_type="xsd:date", description="ISO Date yyyy-mm-dd"),
     (value_type_id=TRE_TYPE_DATETIME, value_type="xsd:dateTime", description="ISO Datetime yyyy-mm-ddTHH:mm:ss.sss"),
     (value_type_id=TRE_TYPE_TIME, value_type="xsd:time", description="ISO Time HH:mm:ss.sss"),
