@@ -29,10 +29,10 @@ export
     DataStore, Vocabulary, VocabularyItem, AbstractStudy, Study, Domain, Entity, EntityRelation,
     AbstractAsset, Asset, AbstractAssetVersion, AssetVersion, DataFile, Transformation,
     createdatastore, opendatastore, closedatastore,
-    upsert_study!, upsert_domain!, get_domain, get_study, list_studies,
+    upsert_study!, upsert_domain!, get_domain, get_study, list_studies, add_study_domain!,
     upsert_entity!, get_entity, upsert_entityrelation!, get_entityrelation, list_domainentities, list_domainrelations,
     datasetlakename, git_commit_info,
-    lookup_variables,
+    lookup_variables, get_eav_variables,
     get_namedkey, get_variable_id, get_variable, get_datasetname, updatevalues, insertdata, insertwithidentity,
     get_table, selectdataframe, prepareselectstatement, dataset_to_dataframe, dataset_to_arrow, dataset_to_csv,
     dataset_variables, dataset_column, savedataframe,
@@ -54,19 +54,20 @@ end
 
 abstract type AbstractStudy end
 
+Base.@kwdef mutable struct Domain
+    domain_id::Union{Int,Nothing} = nothing
+    name::String
+    uri::Union{Missing,String} = missing
+    description::Union{Missing,String} = missing
+end
+
 Base.@kwdef mutable struct Study <: AbstractStudy
     study_id::Union{UUID,Nothing} = nothing
     name::String = "study_name"
     description::String = "study description"
     external_id::String = "external_id"
     study_type_id::Int = 1
-end
-
-Base.@kwdef mutable struct Domain
-    domain_id::Union{Int,Nothing} = nothing
-    name::String
-    uri::Union{Missing,String} = missing
-    description::Union{Missing,String} = missing
+    domains::Vector{Domain} = Domain[] # List of domains associated with the study
 end
 
 Base.@kwdef mutable struct Entity

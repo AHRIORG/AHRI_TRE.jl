@@ -55,6 +55,7 @@ try
         @error "No data file found for the asset version. Please create a data file first"
       end
       @info "Data file path: '$(AHRI_TRE.file_uri_to_path(datafile.storage_uri))'" #unescapeuri(str) AHRI_TRE.file_uri_to_path
+      variables = AHRI_TRE.get_eav_variables(datastore, datafile)
     end
   end
 finally
