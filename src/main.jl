@@ -71,6 +71,15 @@ try
   else
     @info "Inserting a new domain."
   end
+  if do_insertdomain
+    domain = Domain(
+      name="APCC",
+      uri="https://apcc.africa",
+      description="African Population Cohorts Consortium"
+    )
+    domain = upsert_domain!(domain, datastore)
+    @info "Domain inserted: $(domain.name) with ID $(domain.domain_id)"
+  end
   if do_createstudy
     study = Study(
       name="APCC Update",
@@ -80,20 +89,7 @@ try
     )
     study = upsert_study!(study, datastore)
     @info "Study created or updated: $(study.name) with ID $(study.study_id)"
-  end
-  if do_updatestudy
-    study.description = "Updated description for APCC cohort"
-    study = upsert_study!(study, datastore)
-    @info "Study updated: $(study.name) with ID $(study.study_id)"
-  end
-  if do_insertdomain
-    domain = Domain(
-      name="APCC",
-      uri="https://apcc.africa",
-      description="African Population Cohorts Consortium"
-    )
-    domain = upsert_domain!(domain, datastore)
-    @info "Domain inserted: $(domain.name) with ID $(domain.domain_id)"
+    add_study_domain!(datastore, study, domain)
   end
   if do_entities
     entity = Entity(
