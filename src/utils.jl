@@ -67,10 +67,13 @@ Handles:
 function file_uri_to_path(uri::AbstractString)::String
     u = URI(uri)
     u.scheme == "file" || throw(ArgumentError("Not a file:// URI"))
-
     # Decode path portion (slashes still present)
-    decoded_path = unescapeuri(u.path)  # e.g., "/C:/Users/me", "/share/f.txt", "/home/me"
-
+    decoded_path = nothing
+    if u.path == ""
+        decoded_path = unescapeuri(u.host)
+    else
+        decoded_path = unescapeuri(u.path)
+    end
     if Sys.iswindows()
         if !isempty(u.host)
             # UNC: file://server/share/dir/file -> \\server\share\dir\file
@@ -168,7 +171,7 @@ function convert_missing_to_string!(df::DataFrame)
 end
 #region NCName conversion
 _is_start_char(c::Char) = occursin(_RE_START, string(c))
-_is_name_char(c::Char)  = occursin(_RE_NAME,  string(c))
+_is_name_char(c::Char) = occursin(_RE_NAME, string(c))
 
 """
     is_ncname(s::AbstractString) -> Bool
@@ -178,11 +181,13 @@ Return true if `s` is a valid NCName (no colon, proper start char, allowed name 
 function is_ncname(s::AbstractString)
     isempty(s) && return false
     occursin(':', s) && return false
-    it = iterate(s); it === nothing && return false
+    it = iterate(s)
+    it === nothing && return false
     (c, st) = it
     _is_start_char(c) || return false
     while true
-        it = iterate(s, st); it === nothing && break
+        it = iterate(s, st)
+        it === nothing && break
         (c, st) = it
         _is_name_char(c) || return false
     end
@@ -225,7 +230,8 @@ function to_ncname(s::AbstractString; replacement="_", prefix="_", avoid_reserve
     end
 
     while true
-        it = iterate(t, st); it === nothing && break
+        it = iterate(t, st)
+        it === nothing && break
         (c, st) = it
         print(io, _is_name_char(c) ? c : replacement)
     end

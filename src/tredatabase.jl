@@ -964,6 +964,30 @@ function get_study(store::DataStore, name::AbstractString)::Union{Study,Nothing}
     )
 end
 """
+    list_studies(store::DataStore)::Vector{Study}
+
+Return a vector of all Study objects in the specified DataStore.
+- 'store' is the DataStore object containing the database connection.
+This function retrieves all studies from the database, ordered by name.
+"""
+function list_studies(store::DataStore)::Vector{Study}
+    db = store.store
+    sql = raw"""
+        SELECT study_id, name, description, external_id, study_type_id
+          FROM studies
+         ORDER BY name;
+    """
+    stmt = DBInterface.prepare(db, sql)
+    df = DBInterface.execute(stmt) |> DataFrame
+    return [Study(
+        study_id=UUID(row.study_id),
+        name=row.name,
+        description=coalesce(row.description, missing),
+        external_id=row.external_id,
+        study_type_id=row.study_type_id
+    ) for row in eachrow(df)]
+end
+"""
     upsert_domain!(domain::Domain, store::DataStore)::Domain
 
 Create or update a domain record. If a domain with the same (name, uri) already
@@ -1262,6 +1286,45 @@ function list_domainrelations(store::DataStore, domain_id::Int)::DataFrame
     return df
 end
 """
+    list_assets(store::DataStore, study::Study; include_versions=true)::Vector{Asset}
+Return a DataFrame containing all assets in the specified study.
+- 'store' is the DataStore object containing the database connection.
+- 'study' is the Study object to list assets from.
+- 'include_versions' is a boolean flag indicating whether to include asset versions in the returned Asset objects.
+The DataFrame will contain all columns from the assets table, ordered by name.
+"""
+function list_assets(store::DataStore, study::Study; include_versions=true)::Vector{Asset}
+    sql = raw"""
+        SELECT asset_id, name, description, asset_type
+          FROM assets
+         WHERE study_id = $1
+         ORDER BY name;
+    """
+    conn = store.store
+    df = DBInterface.execute(DBInterface.prepare(conn, sql), (study.study_id,)) |> DataFrame
+    if nrow(df) == 0
+        return Asset[]
+    end
+    assets = Vector{Asset}(undef, nrow(df))
+    for i in 1:nrow(df)
+        row = df[i, :]
+        asset = Asset(
+            asset_id=UUID(row.asset_id),
+            study=study,
+            name=row.name,
+            description=coalesce(row.description, missing),
+            asset_type=row.asset_type
+        )
+        if include_versions
+            asset.versions = get_assetversions(store, asset)
+        else
+            asset.versions = AssetVersion[]
+        end
+        assets[i] = asset
+    end
+    return assets
+end
+"""
     get_asset(store::DataStore, study::Study, name::String)::Union{Asset,Nothing}
 
     Return an Asset object by its name in the specified study.
@@ -1350,8 +1413,8 @@ function get_assetversions(store::DataStore, asset::Asset)::Vector{AssetVersion}
     for i in 1:nrow(df)
         row = df[i, :]
         versions[i] = AssetVersion(
-            version_id=row.version_id,
-            asset=Asset,
+            version_id=UUID(row.version_id),
+            asset=asset,
             major=row.major,
             minor=row.minor,
             patch=row.patch,
@@ -1479,6 +1542,47 @@ function register_datafile(store::DataStore, datafile::DataFile)
     DBInterface.execute(stmt, (datafile.assetversion.version_id, datafile.compressed, datafile.encrypted,
         datafile.compression_algorithm, datafile.storage_uri, datafile.edam_format, datafile.digest))
     return nothing
+end
+"""
+    get_datafile_meta(store::DataStore, assetversion::AssetVersion)::Union{DataFile,Nothing}
+
+Get metadata for a DataFile associated with the specified AssetVersion.
+- `store`: The DataStore object containing connection details for the datastore.
+- `assetversion`: The AssetVersion object for which to retrieve the DataFile metadata.
+If no DataFile is found, it returns `nothing`.
+"""
+function get_datafile_meta(store::DataStore, assetversion::AssetVersion)::Union{DataFile,Nothing}
+    if assetversion.version_id === nothing
+        @error "AssetVersion must have a valid version_id to retrieve DataFile metadata"
+        return nothing
+    end
+    if assetversion.asset.asset_type != "file"
+        @error "AssetVersion must be of type 'file' to have associated DataFile metadata"
+        return nothing
+    end
+    # Query the datafiles table for the given asset version
+    db = store.store
+    sql = raw"""
+        SELECT datafile_id, compressed, encrypted, compression_algorithm, storage_uri, edam_format, digest
+          FROM datafiles
+         WHERE datafile_id = $1
+         LIMIT 1;
+    """
+    stmt = DBInterface.prepare(db, sql)
+    df = DBInterface.execute(stmt, (assetversion.version_id,)) |> DataFrame
+    if nrow(df) == 0
+        return nothing
+    end
+    row = df[1, :]
+    return DataFile(
+        assetversion=assetversion,
+        compressed=row.compressed,
+        encrypted=row.encrypted,
+        compression_algorithm=row.compression_algorithm,
+        storage_uri=row.storage_uri,
+        edam_format=row.edam_format,
+        digest=row.digest
+    )
 end
 """
     save_transformation!(store::DataStore, transformation::Transformation)::Transformation

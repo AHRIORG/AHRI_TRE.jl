@@ -29,7 +29,7 @@ export
     DataStore, Vocabulary, VocabularyItem, AbstractStudy, Study, Domain, Entity, EntityRelation,
     AbstractAsset, Asset, AbstractAssetVersion, AssetVersion, DataFile, Transformation,
     createdatastore, opendatastore, closedatastore,
-    upsert_study!, upsert_domain!, get_domain, get_study,
+    upsert_study!, upsert_domain!, get_domain, get_study, list_studies,
     upsert_entity!, get_entity, upsert_entityrelation!, get_entityrelation, list_domainentities, list_domainrelations,
     datasetlakename, git_commit_info,
     lookup_variables,

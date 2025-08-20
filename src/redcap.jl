@@ -491,8 +491,8 @@ function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; f
     out_dir = joinpath(lake_root, "ingests")
     mkpath(out_dir)
 
-    # Choose a random unique filename (JSON, since format=json)
-    fname = string("redcap_records_", Dates.format(now(), "yyyymmdd_HHMMSS"), "_", uuid4(), ".csv")
+    # Choose a random unique filename (csv, since format=csv)
+    fname = string("redcap_records_", uuid4(), ".csv")
     outpath = joinpath(out_dir, fname)
 
     f = isempty(fields) ? redcap_fields(api_url, api_token) : fields #remove this once the eav export bug that returns nothing when the field list is empty, is fixed
