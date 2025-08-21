@@ -1774,7 +1774,7 @@ function register_dataset_variables(store::DataStore, dataset::DataSet)::Nothing
     """
     stmt = DBInterface.prepare(db, sql)
     for variable in dataset.variables
-        DBInterface.execute(stmt, (dataset.dataset_id, variable.variable_id, variable.keyrole))
+        DBInterface.execute(stmt, (dataset.version.version_id, variable.variable_id, variable.keyrole))
     end
     return nothing
 end
@@ -1800,17 +1800,18 @@ function create_dataset_meta(store::DataStore, study::Study, dataset_name::Strin
     variables = get_study_variables(store, study)
     eav_variables = get_eav_variables(store, datafile)
     variables = leftjoin(eav_variables, variables, on=:field_name => :name, makeunique=true)
-
+    @info "Variables = $(names(variables))"
     @info "Found $(nrow(variables)) variables in EAV data for dataset $(dataset_name)"
     for row in eachrow(variables)
-        if ismissing(row.name)
+        @info "Processing variable: $(row.field_name) with ID $(row.variable_id)"
+        if ismissing(row.variable_id)
             @warn "Skipping variable $(row.field_name) with missing name in EAV data"
             continue
         end
         variable = Variable(
             variable_id=row.variable_id,
             domain_id=row.domain_id,
-            name=row.name,
+            name=row.field_name,
             value_type_id=row.value_type_id,
             vocabulary_id=coalesce(row.vocabulary_id, missing),
             keyrole=row.keyrole,
@@ -1877,7 +1878,7 @@ function transform_eav_to_dataset(store::DataStore, datafile::DataFile)::DataSet
     end
     dataset_name = schema * "." * dataset_name
     dataset = create_dataset_meta(store, study, dataset_name, "Dataset from eav file $(asset.name)", datafile)
-    tbl = "tre_lake." * "." * dataset_name
+    tbl = "tre_lake" * "." * dataset_name
     fpath = quote_sql_str(file_uri_to_path(datafile.storage_uri))
     sql = """
     CREATE OR REPLACE TABLE $(tbl) AS
@@ -1922,7 +1923,6 @@ function transform_eav_to_dataset(store::DataStore, datafile::DataFile)::DataSet
         ORDER BY record
     ) t
     """
-    @info "Tabulate sql: $(sql)"
     DuckDB.query(store.lake, sql)
     @info "Transformed EAV data from $(fpath) to table $(tbl)"
     return dataset

@@ -152,7 +152,7 @@ Base.@kwdef mutable struct Variable
     domain_id::Int
     name::String
     value_type_id::Int
-    vocabulary_id::Union{Int,Nothing} = nothing # Reference to a vocabulary if applicable
+    vocabulary_id::Union{Missing,Int} = missing # Reference to a vocabulary if applicable
     keyrole::String = "none" # "none", "record", "external"
     description::Union{Missing,String} = missing
     ontology_namespace::Union{Missing,String} = missing
@@ -376,15 +376,15 @@ Transforms the csv file from EAV (long) format to wide format dataset and regist
 - `vocabulary_prefix`: The prefix for the vocabulary used in the REDCap project (default is "REDCap").
 - `forms`: A vector of form names to include in the REDCap project (default is empty, meaning all forms).
 - `fields`: A vector of field names to include in the REDCap project (default is empty, meaning all fields).
-Returns nothing.
+Returns the DataFile object representing the ingested REDCap project data.
 """
 function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_token::AbstractString, study::Study, domain::Domain;
-    vocabulary_prefix::String="REDCap", forms::Vector{String}=String[], fields::Vector{String}=String[])
+    vocabulary_prefix::String="REDCap", forms::Vector{String}=String[], fields::Vector{String}=String[])::DataFile
     conn = store.store
     if isnothing(conn)
         error("No datastore connection available. Please open datastore connection in DataStore.store before calling ingest_redcap_project.")
     end
-
+    datafile = nothing
     # Start transaction on the datastore
     transaction_begin(conn)
     try
@@ -421,7 +421,7 @@ function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_to
         transaction_rollback(conn)
         rethrow(e)
     end
-    return nothing
+    return datafile
 end
 """
     prepare_datafile(file_path::AbstractString, edam_format::String; compress::Bool=false, encrypt::Bool=false) -> DataFile
