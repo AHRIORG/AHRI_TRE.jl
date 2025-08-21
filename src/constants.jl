@@ -42,5 +42,5 @@ const _VT_MULTIRESPONSE = TRE_TYPE_MULTIRESPONSE
 # Single-char predicates using Unicode properties.
 # StartChar: '_' or any Letter
 const _RE_START = r"^[_\p{L}]$"
-# NameChar: Letter, Number, combining marks, connector punct, letter modifiers, '-' or '.'
-const _RE_NAME  = r"^[\p{L}\p{N}\p{Mc}\p{Mn}\p{Pc}\p{Lm}\-\.]$"
+# NameChar: Letter, Number, combining marks, connector punct, letter modifiers
+const _RE_NAME  = r"^[\p{L}\p{N}\p{Mc}\p{Mn}\p{Pc}\p{Lm}]+$"

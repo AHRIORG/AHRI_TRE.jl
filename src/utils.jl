@@ -253,3 +253,59 @@ function to_ncname(s::AbstractString; replacement="_", prefix="_", avoid_reserve
     return out
 end
 #endregion NCName conversion
+"""
+    emptydir(path; create=true, retries=3, wait=0.2)
+
+Ensure `path` exists (if `create=true`), then remove all files/subdirs inside it,
+keeping `path` itself. Retries briefly to tolerate transient files.
+
+Safety: refuses to operate on the filesystem root "/".
+"""
+function emptydir(path::AbstractString; create::Bool=true, retries::Integer=3, wait::Real=0.2)
+    path = abspath(path)
+    real = try realpath(path) catch; path end
+    real == "/" && error("Refusing to operate on root '/'")
+
+    if !isdir(path)
+        create || error("Directory does not exist: $path")
+        mkpath(path)
+    end
+
+    for attempt in 1:retries
+        # delete files first, then dirs (bottom-up)
+        for (root, dirs, files) in walkdir(path; topdown=false)
+            for f in files
+                p = joinpath(root, f)
+                try
+                    rm(p; force=true)
+                catch
+                    # ignore; retry next pass
+                end
+            end
+            for d in dirs
+                p = joinpath(root, d)
+                try
+                    rm(p; recursive=false, force=true)
+                catch
+                    # ignore; retry next pass
+                end
+            end
+        end
+
+        isempty(readdir(path)) && return
+        sleep(wait)
+    end
+
+    # Final hard pass with explicit error reporting
+    try
+        for entry in readdir(path; join=true)
+            rm(entry; recursive=true, force=true)
+        end
+    catch e
+        error("Final cleanup of $path failed: $(typeof(e)): $(e.msg)")
+    end
+
+    if !isempty(readdir(path))
+        error("Failed to empty $path: some entries remain (likely permission issues or open file handles).")
+    end
+end

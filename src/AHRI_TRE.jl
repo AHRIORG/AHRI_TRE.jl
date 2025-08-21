@@ -36,7 +36,7 @@ export
     get_namedkey, get_variable_id, get_variable, get_datasetname, updatevalues, insertdata, insertwithidentity,
     get_table, selectdataframe, prepareselectstatement, dataset_to_dataframe, dataset_to_arrow, dataset_to_csv,
     dataset_variables, dataset_column, savedataframe,
-    ingest_redcap_project, register_redcap_datadictionary
+    ingest_redcap_project, register_redcap_datadictionary, transform_eav_to_dataset
 
 #region Structure
 Base.@kwdef mutable struct DataStore
@@ -118,7 +118,7 @@ Base.@kwdef mutable struct AssetVersion <: AbstractAssetVersion
 end
 
 Base.@kwdef mutable struct DataFile
-    assetversion::Union{AssetVersion,Nothing} = nothing
+    version::Union{AssetVersion,Nothing} = nothing
     compressed::Bool = false
     encrypted::Bool = false
     compression_algorithm::Union{String,Missing} = missing
@@ -152,11 +152,16 @@ Base.@kwdef mutable struct Variable
     domain_id::Int
     name::String
     value_type_id::Int
+    vocabulary_id::Union{Int,Nothing} = nothing # Reference to a vocabulary if applicable
+    keyrole::String = "none" # "none", "record", "external"
+    description::Union{Missing,String} = missing
+    ontology_namespace::Union{Missing,String} = missing
+    ontology_class::Union{Missing,String} = missing
     vocabulary::Union{Missing,Vocabulary} = missing
 end
 
 Base.@kwdef mutable struct DataSet
-    assetversion::Union{AssetVersion,Nothing} = nothing
+    version::Union{AssetVersion,Nothing} = nothing
     variables::Vector{Variable} = Variable[]
 end
 
@@ -184,22 +189,22 @@ NB: ONLY USE THIS FUNCTION IN DEVELOPMENT OR TESTING ENVIRONMENTS,
     as it will drop the existing database, lake and all its contents.
 """
 function createdatastore(store::DataStore; superuser::String="postgres", superpwd::String="", port::Int=5432)
-    maint = DBInterface.connect(LibPQ.Connection, "host=$(store.server) port=$(port) dbname=postgres user=$(superuser) password=$(superpwd)")
+    store_conn = DBInterface.connect(LibPQ.Connection, "host=$(store.server) port=$(port) dbname=postgres user=$(superuser) password=$(superpwd)")
     try
-        replace_database(maint, store.dbname, store.user, store.password)
+        replace_database(store_conn, store.dbname, store.user, store.password)
     finally
-        DBInterface.close!(maint)
+        DBInterface.close!(store_conn)
     end
 
     if !isnothing(store.lake_db) && !isempty(store.lake_db)
-        maint2 = DBInterface.connect(LibPQ.Connection, "host=$(store.server) port=$(port) dbname=postgres user=$(superuser) password=$(superpwd)")
+        lake_conn = DBInterface.connect(LibPQ.Connection, "host=$(store.server) port=$(port) dbname=postgres user=$(superuser) password=$(superpwd)")
         try
-            replace_database(maint2, store.lake_db, store.lake_user, store.lake_password)
+            replace_database(lake_conn, store.lake_db, store.lake_user, store.lake_password)
         finally
-            DBInterface.close!(maint2)
+            DBInterface.close!(lake_conn)
         end
     end
-
+    emptydir(store.lake_data) # Remove existing lake data directory
     # Open connection then build schema via createdatabase(conn)
     conn = nothing
     try
@@ -310,59 +315,6 @@ end
 Returns an array of lines in `str` 
 """
 lines(str) = split(str, '\n')
-
-"""
-    get_datasetmetadata(store::DataStore, asset_id::UUID, version_id::UUID = nothing)::DataSet
-
-Get the metadata of a dataset from the datastore. 
-If `version_id` is provided, it retrieves the metadata for that specific version, otherwise it retrieves the latest version.
-- `store`: The DataStore object containing connection details for the datastore.
-- `asset_id`: The UUID of the asset representing the dataset.
-- `version_id`: The UUID of the specific version of the dataset (optional). If not provided, it retrieves the latest version.
-"""
-function get_datasetmetadata(store::DataStore, asset_id::UUID, version_id::UUID=nothing)::DataSet
-    db = store.store
-    if isnothing(db)
-        error("No datastore connection available. Please provide a valid PostgreSQL connection for the DataStore.")
-    end
-
-    # Prepare SQL query to get dataset metadata
-    sql = """
-    SELECT
-        av.asset_id,
-        av.version_id,
-        v.variable_id,
-        v.name AS variable_name,
-        v.value_type_id
-    FROM asset_versions av
-      JOIN assets a ON av.asset_id = a.asset_id
-      JOIN variables v ON a.asset_id = v.asset_id
-    WHERE a.asset_id = @asset_id
-    """
-
-    if !isnothing(version_id)
-        sql *= " AND av.version_id = @version_id"
-    else
-        sql *= " AND av.is_latest = true"
-    end
-
-    stmt = DBInterface.prepare(db, sql)
-    result = DBInterface.execute(stmt, (asset_id=asset_id, version_id=version_id)) |> DataFrame
-    # Set version_id to the first version_id in the result if not provided
-    if isnothing(version_id) && nrow(result) > 0
-        version_id = result[1, :version_id]
-    end
-    # Create DataSet object and populate it with variables
-    dataset = DataSet()
-    dataset.assetversion = AssetVersion(asset=Asset(asset_id=asset_id), version_id=version_id)
-
-    for row in eachrow(result)
-        variable = Variable(variable_id=row.variable_id, name=row.variable_name, value_type_id=row.value_type_id)
-        push!(dataset.variables, variable)
-    end
-
-    return dataset
-end
 """
     dataset_variables(db::DBInterface.Connection, dataset)::AbstractDataFrame
 
@@ -371,9 +323,7 @@ Return the list of variables in a dataset
 function dataset_variables(db::DBInterface.Connection, dataset::DataSet)::AbstractDataFrame
     sql = """
     SELECT
-        v.variable_id,
-        v.name variable,
-        v.value_type_id
+        v.*
     FROM dataset_variables dv
       JOIN variables v ON dv.variable_id = v.variable_id
     WHERE dv.dataset_id = @dataset;
@@ -461,7 +411,7 @@ function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_to
         save_transformation!(store, transformation)
         @info "Created transformation with ID: $(transformation.transformation_id)"
         # Add the data file as an output to the transformation
-        add_transformation_output(store, transformation.transformation_id, datafile.assetversion.version_id)
+        add_transformation_output(store, transformation.transformation_id, datafile.version.version_id)
         @info "Added transformation output"
 
         # Commit transaction
@@ -539,10 +489,10 @@ function attach_datafile(store::DataStore, study::Study, asset_name::String,
     datafile = prepare_datafile(file_path, edam_format; compress=compress, encrypt=encrypt)
     # Create the Asset object
     asset = create_asset(store, study, asset_name, "file", description)
-    datafile.assetversion = asset.versions[1]  # Use the base version of the asset
+    datafile.version = asset.versions[1]  # Use the base version of the asset
     # Add the datafile to the datastore
     register_datafile(store, datafile)
-    @info "Registered data file for asset: $(asset_name) with version ID: $(datafile.assetversion.version_id)"
+    @info "Registered data file for asset: $(asset_name) with version ID: $(datafile.version.version_id)"
     # Return the DataFile object
     return datafile
 end
@@ -564,7 +514,7 @@ It assumes the file is already in the data lake and creates a DataFile object as
 function attach_datafile(store::DataStore, assetversion::AssetVersion, file_path::AbstractString, edam_format::String;
     compress::Bool=false, encrypt::Bool=false)::DataFile
     datafile = prepare_datafile(file_path, edam_format; compress=compress, encrypt=encrypt)
-    datafile.assetversion = assetversion
+    datafile.version = assetversion
     # Add the datafile to the datastore
     register_datafile(store.store, datafile)
     @info "Registered data file for asset version: $(assetversion.version_id)"

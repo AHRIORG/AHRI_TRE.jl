@@ -56,6 +56,9 @@ try
       end
       @info "Data file path: '$(AHRI_TRE.file_uri_to_path(datafile.storage_uri))'" #unescapeuri(str) AHRI_TRE.file_uri_to_path
       variables = AHRI_TRE.get_eav_variables(datastore, datafile)
+      @info "Found $(length(variables)) EAV variables in the data file: $(datafile.version.asset.name)"
+      dataset = AHRI_TRE.transform_eav_to_dataset(datastore, datafile)
+      @info "Transformed EAV data to dataset $(dataset.version.asset.name)."
     end
   end
 finally

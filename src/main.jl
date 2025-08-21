@@ -82,7 +82,7 @@ try
   end
   if do_createstudy
     study = Study(
-      name="APCC Update",
+      name="APCC",
       description="Update APCC cohort data and contact information",
       external_id="APCC",
       study_type_id=3
