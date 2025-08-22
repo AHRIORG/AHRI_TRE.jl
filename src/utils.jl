@@ -309,3 +309,18 @@ function emptydir(path::AbstractString; create::Bool=true, retries::Integer=3, w
         error("Failed to empty $path: some entries remain (likely permission issues or open file handles).")
     end
 end
+"""
+    caller_file_runtime()
+
+Return the file path of the script that called this function at runtime.
+  'level' indicates how many levels up the call stack to go (default 1 = immediate caller).
+"""
+function caller_file_runtime(level::Int=1)
+    for (i, fr) in enumerate(stacktrace())
+        # skip this helper frame
+        if i > level
+            return String(fr.file)
+        end
+    end
+    return nothing
+end

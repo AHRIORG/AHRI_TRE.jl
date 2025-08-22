@@ -369,7 +369,7 @@ function createtransformations(conn::DBInterface.Connection)
     DO $$
     BEGIN
         IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'transformation_type_enum') THEN
-            CREATE TYPE transformation_type_enum AS ENUM ('ingest','transform','entity','export','repository);
+            CREATE TYPE transformation_type_enum AS ENUM ('ingest','transform','entity','export','repository');
         END IF;
     END$$;
     """
@@ -1675,6 +1675,7 @@ Add a transformation output to the transformation_outputs table.
 - `store`: The DataStore object containing connection details for the datastore.
 - `transformation_id`: The ID of the transformation to which the output belongs.
 - `version_id`: The UUID of the asset version that is the output of the transformation.
+This function will insert a new record into the transformation_outputs table linking the transformation to the asset version.
 """
 function add_transformation_output(store::DataStore, transformation_id::Int, version_id::UUID)::Nothing
     db = store.store
@@ -1687,7 +1688,66 @@ function add_transformation_output(store::DataStore, transformation_id::Int, ver
     DBInterface.execute(stmt, (transformation_id, version_id))
     return nothing
 end
+"""
+    add_transformation_input(store::DataStore, transformation_id::Int, version_id::UUID)::Nothing
 
+Add a transformation input to the transformation_inputs table.
+- `store`: The DataStore object containing connection details for the datastore.
+- `transformation_id`: The ID of the transformation to which the input belongs.
+- `version_id`: The UUID of the asset version that is the input to the transformation.
+This function will insert a new record into the transformation_inputs table linking the transformation to the asset version.
+"""
+function add_transformation_input(store::DataStore, transformation_id::Int, version_id::UUID)::Nothing
+    db = store.store
+    @info "Adding transformation input for transformation ID $(transformation_id) and version ID $(version_id)"
+    sql = raw"""
+        INSERT INTO transformation_inputs (transformation_id, version_id)
+        VALUES ($1, $2);
+    """
+    stmt = DBInterface.prepare(db, sql)
+    DBInterface.execute(stmt, (transformation_id, version_id))
+    return nothing
+end
+"""
+    add_transformation_output(store::DataStore, transformation::Transformation, version::AssetVersion)::Nothing
+
+Add a transformation output to the transformation_outputs table using Transformation and AssetVersion objects.
+- `store`: The DataStore object containing connection details for the datastore.
+- `transformation`: The Transformation object containing the transformation_id.
+- `version`: The AssetVersion object containing the version_id.
+This function checks that both the transformation and version have valid IDs before calling the lower-level function.
+"""
+function add_transformation_output(store::DataStore, transformation::Transformation, version::AssetVersion)::Nothing
+    if transformation.transformation_id === nothing
+        @error "Transformation must have a valid transformation_id to add an output"
+        return nothing
+    end
+    if version.version_id === nothing
+        @error "AssetVersion must have a valid version_id to add as a transformation output"
+        return nothing
+    end
+    add_transformation_output(store, transformation.transformation_id, version.version_id)
+end
+"""
+    add_transformation_input(store::DataStore, transformation::Transformation, version::AssetVersion)::Nothing
+
+Add a transformation input to the transformation_inputs table using Transformation and AssetVersion objects.
+- `store`: The DataStore object containing connection details for the datastore.
+- `transformation`: The Transformation object containing the transformation_id.
+- `version`: The AssetVersion object containing the version_id.
+This function checks that both the transformation and version have valid IDs before calling the lower-level function.
+"""
+function add_transformation_input(store::DataStore, transformation::Transformation, version::AssetVersion)::Nothing
+    if transformation.transformation_id === nothing
+        @error "Transformation must have a valid transformation_id to add an input"
+        return nothing
+    end
+    if version.version_id === nothing
+        @error "AssetVersion must have a valid version_id to add as a transformation input"
+        return nothing
+    end
+    add_transformation_input(store, transformation.transformation_id, version.version_id)
+end
 """
     get_eav_variables(store::DataStore, datafile::DataFile)::Vector{Variable}
 
@@ -1844,41 +1904,19 @@ This function wraps the string in single quotes and escapes any existing single 
 """
 quote_sql_str(s::AbstractString) = "'" * replace(s, "'" => "''") * "'"
 """
-    transform_eav_to_dataset(store::DataStore, datafile::DataFile)::DataSet
+    transform_eav_to_table!(store::DataStore, datafile::DataFile, dataset::DataSet)::Nothing
 
-Transform an EAV (Entity-Attribute-Value) data file into a dataset.
+Transform an EAV (Entity-Attribute-Value) data file into a table in the TRE lake.
 - 'store' is the DataStore object containing the database connection.
 - 'datafile' is the DataFile object representing the EAV data file.
-This function creates a new dataset in the database by pivoting the EAV data into a wide format.
+- 'dataset' is the DataSet object representing the target dataset.
+This function creates a new table in the TRE lake by pivoting the EAV data into a wide format.
 It aggregates multiple values for the same field per record into a single column.
-The dataset name is derived from the datafile's asset name, dropping the "_eav" suffix if present.
-Returns a DataSet object representing the transformed data.
+The table name is derived from the dataset's asset name.
 This function assumes the EAV data is stored in a csv table with columns: record, field_name, and value.
 """
-function transform_eav_to_dataset(store::DataStore, datafile::DataFile)::DataSet
-    #set dataset name to the datafile asset name, drop "_eav" suffix if present
-    asset = datafile.version.asset
-    if isnothing(asset)
-        @error "DataFile must have a valid asset version with an associated asset"
-        return nothing
-    end
-    study = asset.study
-    if isnothing(study)
-        @error "DataFile must have a valid asset version with an associated study"
-        return nothing
-    end
-    schema = to_ncname(study.name)
-    sql = "CREATE SCHEMA IF NOT EXISTS $(schema);"
-    DuckDB.query(store.lake, sql)
-    dataset_name = replace(asset.name, r"_eav$" => "")
-    dataset_name = to_ncname(dataset_name)
-    if dataset_name == ""
-        @error "Dataset name derived from asset name is empty after removing '_eav' suffix"
-        return nothing
-    end
-    dataset_name = schema * "." * dataset_name
-    dataset = create_dataset_meta(store, study, dataset_name, "Dataset from eav file $(asset.name)", datafile)
-    tbl = "tre_lake" * "." * dataset_name
+function transform_eav_to_table!(store::DataStore, datafile::DataFile, dataset::DataSet)::Nothing
+    tbl = "tre_lake" * "." * dataset.version.asset.name
     fpath = quote_sql_str(file_uri_to_path(datafile.storage_uri))
     sql = """
     CREATE OR REPLACE TABLE $(tbl) AS
@@ -1925,5 +1963,5 @@ function transform_eav_to_dataset(store::DataStore, datafile::DataFile)::DataSet
     """
     DuckDB.query(store.lake, sql)
     @info "Transformed EAV data from $(fpath) to table $(tbl)"
-    return dataset
+    return nothing
 end

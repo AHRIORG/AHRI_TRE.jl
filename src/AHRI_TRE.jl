@@ -399,7 +399,7 @@ function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_to
                     "http://edamontology.org/format_3752"; description = "REDCap project $(redcap_info.project_id) EAV Export for $(redcap_info.project_title)",compress=true)
         @info "Attached data file: $(datafile.storage_uri) with digest $(datafile.digest)"
         #Create an ingest transformation to record this ingestion
-        commit = git_commit_info(; script_path=@__FILE__)
+        commit = git_commit_info(; script_path=caller_file_runtime(2))
         transformation = Transformation(
             transformation_type="ingest",
             description="Ingested REDCap project $(redcap_info.project_id) records for project: $(redcap_info.project_title) using AHRI_TRE ingest_redcap_project function",
@@ -411,9 +411,7 @@ function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_to
         save_transformation!(store, transformation)
         @info "Created transformation with ID: $(transformation.transformation_id)"
         # Add the data file as an output to the transformation
-        add_transformation_output(store, transformation.transformation_id, datafile.version.version_id)
-        @info "Added transformation output"
-
+        add_transformation_output(store, transformation, datafile.version)
         # Commit transaction
         transaction_commit(conn)
     catch e
@@ -547,6 +545,63 @@ function attach_new_datafile_version(store::DataStore, assetversion::AssetVersio
     # Return the DataFile object
     return datafile
 end
+
+"""
+    transform_eav_to_dataset(store::DataStore, datafile::DataFile)::DataSet
+
+Transform an EAV (Entity-Attribute-Value) data file into a dataset.
+- 'store' is the DataStore object containing the database connection.
+- 'datafile' is the DataFile object representing the EAV data file.
+This function creates a new dataset in the database by pivoting the EAV data into a wide format.
+It aggregates multiple values for the same field per record into a single column.
+The dataset name is derived from the datafile's asset name, dropping the "_eav" suffix if present.
+Returns a DataSet object representing the transformed data.
+This function assumes the EAV data is stored in a csv table with columns: record, field_name, and value.
+"""
+function transform_eav_to_dataset(store::DataStore, datafile::DataFile)::DataSet
+    #set dataset name to the datafile asset name, drop "_eav" suffix if present
+    asset = datafile.version.asset
+    if isnothing(asset)
+        @error "DataFile must have a valid asset version with an associated asset"
+        return nothing
+    end
+    study = asset.study
+    if isnothing(study)
+        @error "DataFile must have a valid asset version with an associated study"
+        return nothing
+    end
+    schema = to_ncname(study.name)
+    sql = "CREATE SCHEMA IF NOT EXISTS $(schema);"
+    DuckDB.query(store.lake, sql)
+    dataset_name = replace(asset.name, r"_eav$" => "")
+    dataset_name = to_ncname(dataset_name)
+    if dataset_name == ""
+        @error "Dataset name derived from asset name is empty after removing '_eav' suffix"
+        return nothing
+    end
+    dataset_name = schema * "." * dataset_name
+    dataset = create_dataset_meta(store, study, dataset_name, "Dataset from eav file $(asset.name)", datafile)
+    transform_eav_to_table!(store, datafile, dataset)
+    #Create a transformation to record this ingestion
+    commit = git_commit_info(; script_path=caller_file_runtime(2))
+    transformation = Transformation(
+        transformation_type="transform",
+        description="Transformed eav $(asset.name) to dataset $(dataset_name)",
+        repository_url=commit.repo_url,
+        commit_hash=commit.commit,
+        file_path=commit.script_relpath
+    )
+    # Save the transformation to the datastore
+    save_transformation!(store, transformation)
+    @info "Created transformation with ID: $(transformation.transformation_id)"
+    # Add the data file as an input to the transformation
+    add_transformation_input(store, transformation, datafile.version)
+    # Add the data set as an output to the transformation
+    add_transformation_output(store, transformation, dataset.version)
+    
+    return dataset
+end
+
 include("constants.jl")
 include("utils.jl")
 include("tredatabase.jl")
