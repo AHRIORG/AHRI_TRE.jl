@@ -369,7 +369,7 @@ function createtransformations(conn::DBInterface.Connection)
     DO $$
     BEGIN
         IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'transformation_type_enum') THEN
-            CREATE TYPE transformation_type_enum AS ENUM ('ingest','transform','entity','export');
+            CREATE TYPE transformation_type_enum AS ENUM ('ingest','transform','entity','export','repository);
         END IF;
     END$$;
     """
