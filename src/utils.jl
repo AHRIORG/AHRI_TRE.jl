@@ -171,14 +171,14 @@ function convert_missing_to_string!(df::DataFrame)
 end
 #region NCName conversion
 _is_start_char(c::Char) = occursin(_RE_START, string(c))
-_is_name_char(c::Char) = occursin(_RE_NAME, string(c))
+_is_name_char(c::Char, strict::Bool=false) = strict ? occursin(_RE_STRICT, string(c)) : occursin(_RE_NAME, string(c))
 
 """
     is_ncname(s::AbstractString) -> Bool
 
 Return true if `s` is a valid NCName (no colon, proper start char, allowed name chars).
 """
-function is_ncname(s::AbstractString)
+function is_ncname(s::AbstractString; strict::Bool=false)
     isempty(s) && return false
     occursin(':', s) && return false
     it = iterate(s)
@@ -189,7 +189,7 @@ function is_ncname(s::AbstractString)
         it = iterate(s, st)
         it === nothing && break
         (c, st) = it
-        _is_name_char(c) || return false
+        _is_name_char(c, strict) || return false
     end
     return true
 end
@@ -204,8 +204,9 @@ Convert `s` into a valid NCName:
 - Removes/condenses repeated `replacement`s.
 - Replaces `:` with `replacement`.
 - Optionally avoids names starting with 'xml' (case-insensitive) by prepending `prefix`.
+- If strict=true, disallows `-` and `.` in names (replaces them too).
 """
-function to_ncname(s::AbstractString; replacement="_", prefix="_", avoid_reserved::Bool=true)
+function to_ncname(s::AbstractString; replacement="_", prefix="_", avoid_reserved::Bool=true, strict::Bool=false)
     t = strip(s)
     # Replace colons outright
     if !isempty(replacement)
@@ -226,14 +227,14 @@ function to_ncname(s::AbstractString; replacement="_", prefix="_", avoid_reserve
         print(io, c)
     else
         print(io, prefix)
-        print(io, _is_name_char(c) ? c : replacement)
+        print(io, _is_name_char(c, strict) ? c : replacement)
     end
 
     while true
         it = iterate(t, st)
         it === nothing && break
         (c, st) = it
-        print(io, _is_name_char(c) ? c : replacement)
+        print(io, _is_name_char(c, strict) ? c : replacement)
     end
 
     out = String(take!(io))
@@ -263,7 +264,11 @@ Safety: refuses to operate on the filesystem root "/".
 """
 function emptydir(path::AbstractString; create::Bool=true, retries::Integer=3, wait::Real=0.2)
     path = abspath(path)
-    real = try realpath(path) catch; path end
+    real = try
+        realpath(path)
+    catch
+        path
+    end
     real == "/" && error("Refusing to operate on root '/'")
 
     if !isdir(path)

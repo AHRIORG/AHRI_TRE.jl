@@ -63,6 +63,9 @@ try
     @info "Transforming REDCap project data into a dataset"
     dataset = AHRI_TRE.transform_eav_to_dataset(datastore, datafile)
     @info "Transformed EAV data to dataset $(dataset.version.asset.name)."
+    # Read back the dataset as a DataFrame
+    df = AHRI_TRE.read_dataset(datastore, dataset)
+    @info "Dataset read back as DataFrame with $(nrow(df)) rows and $(ncol(df)) columns."
 finally
     closedatastore(datastore)
     elapsed = now() - start_time

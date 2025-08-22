@@ -80,9 +80,9 @@ function opendatastore(server::AbstractString, user::AbstractString, password::A
             DBInterface.execute(
                 lake,
                 "ATTACH 'ducklake:postgres:host=$(server) port=$(port) user=$(lake_user) password=$(lake_password) dbname=$(lake_db)' 
-                 AS tre_lake (DATA_PATH '$lake_data', METADATA_SCHEMA 'ducklake_catalog');"
+                 AS $LAKE_ALIAS (DATA_PATH '$lake_data', METADATA_SCHEMA 'ducklake_catalog');"
             )
-            DBInterface.execute(lake, "USE tre_lake;")
+            DBInterface.execute(lake, "USE $LAKE_ALIAS;")
         catch e
             @warn "Could not attach DuckDB lake (postgres extension missing?)" exception = e
         end
@@ -1327,6 +1327,43 @@ function list_domainrelations(store::DataStore, domain_id::Int)::DataFrame
     return df
 end
 """
+    list_assets_df(store::DataStore, study::Study; include_versions=true)::DataFrame
+
+Return a DataFrame containing all assets in the specified study.
+- 'store' is the DataStore object containing the database connection.
+- 'study' is the Study object to list assets from.
+- 'include_versions' is a boolean flag indicating whether to include asset versions in the DataFrame.
+If `include_versions` is true, the DataFrame will include asset version details
+"""
+function list_assets_df(store::DataStore, study::Study; include_versions=true)::DataFrame
+    sql = ""
+    if include_versions
+        sql = raw"""
+            SELECT 
+                a.asset_id, a.name, a.description, a.asset_type,
+                a.date_created, a.created_by,
+                v.version_id,
+                v.version_label,
+                v.version_note,
+                v.created_at version_created,
+                v.created_by version_created_by
+            FROM public.assets a
+              JOIN public.asset_versions v USING(asset_id)
+            WHERE v.is_latest = true
+              AND a.study_id = $1
+            ORDER BY a.name;
+        """
+    else
+        sql = raw"""
+            SELECT asset_id, name, description, asset_type
+              FROM assets
+             WHERE study_id = $1
+             ORDER BY name;
+        """
+    end
+    return DBInterface.execute(DBInterface.prepare(store.store, sql), (study.study_id,)) |> DataFrame
+end
+"""
     list_assets(store::DataStore, study::Study; include_versions=true)::Vector{Asset}
 Return a DataFrame containing all assets in the specified study.
 - 'store' is the DataStore object containing the database connection.
@@ -1335,14 +1372,7 @@ Return a DataFrame containing all assets in the specified study.
 The DataFrame will contain all columns from the assets table, ordered by name.
 """
 function list_assets(store::DataStore, study::Study; include_versions=true)::Vector{Asset}
-    sql = raw"""
-        SELECT asset_id, name, description, asset_type
-          FROM assets
-         WHERE study_id = $1
-         ORDER BY name;
-    """
-    conn = store.store
-    df = DBInterface.execute(DBInterface.prepare(conn, sql), (study.study_id,)) |> DataFrame
+    df = list_assets_df(store, study, include_versions=false)
     if nrow(df) == 0
         return Asset[]
     end
@@ -1375,14 +1405,24 @@ end
     If no asset is found, it returns `nothing`.
     If an asset is found, it returns an Asset object 
 """
-function get_asset(store::DataStore, study::Study, name::String)::Union{Asset,Nothing}
+function get_asset(store::DataStore, study::Study, name::String; include_versions=true, asset_type::Union{Nothing,String}=nothing)::Union{Asset,Nothing}
     conn = store.store
-    sql = raw"""
-        SELECT asset_id FROM assets
-        WHERE study_id = $1 AND name = $2
-        LIMIT 1;
-    """
-    df = DBInterface.execute(DBInterface.prepare(conn, sql), (study.study_id, name)) |> DataFrame
+    df = nothing
+    if !isnothing(asset_type)
+        sql = raw"""
+            SELECT asset_id FROM assets
+            WHERE study_id = $1 AND name = $2 AND asset_type = $3
+            LIMIT 1;
+        """
+        df = DBInterface.execute(DBInterface.prepare(conn, sql), (study.study_id, name, asset_type)) |> DataFrame
+    else
+        sql = raw"""
+            SELECT asset_id FROM assets
+            WHERE study_id = $1 AND name = $2
+            LIMIT 1;
+        """
+        df = DBInterface.execute(DBInterface.prepare(conn, sql), (study.study_id, name)) |> DataFrame
+    end
     if nrow(df) == 0
         return nothing
     end
@@ -1473,9 +1513,9 @@ Return the latest AssetVersion for the specified asset.
 - 'asset' is the Asset object for which to retrieve the latest version.
 """
 function get_latest_version(asset::Asset)::Union{AssetVersion,Nothing}
-    # If there are no versions, return nothing
+    # If there are no versions, retrieve them
     if isempty(asset.versions)
-        return nothing
+        asset.versions = get_assetversions(store, asset)
     end
     # Find the version flagged as latest
     idx = findfirst(v -> v.is_latest, asset.versions)
@@ -1916,7 +1956,12 @@ The table name is derived from the dataset's asset name.
 This function assumes the EAV data is stored in a csv table with columns: record, field_name, and value.
 """
 function transform_eav_to_table!(store::DataStore, datafile::DataFile, dataset::DataSet)::Nothing
-    tbl = "tre_lake" * "." * dataset.version.asset.name
+    tbl = LAKE_ALIAS * "." * get_datasetname(dataset, include_schema=true)
+    
+    schema = to_ncname(datafile.version.asset.study.name)
+    sql = "CREATE SCHEMA IF NOT EXISTS $(schema);"
+    DuckDB.query(store.lake, sql)
+
     fpath = quote_sql_str(file_uri_to_path(datafile.storage_uri))
     sql = """
     CREATE OR REPLACE TABLE $(tbl) AS
@@ -1964,4 +2009,16 @@ function transform_eav_to_table!(store::DataStore, datafile::DataFile, dataset::
     DuckDB.query(store.lake, sql)
     @info "Transformed EAV data from $(fpath) to table $(tbl)"
     return nothing
+end
+"""
+    dataset_to_dataframe(store::DataStore, dataset::DataSet)::DataFrame
+
+Retrieve a dataset from store.lake and return as a DataFrame
+- `store`: The DataStore object containing the datastore and datalake connections.
+- `dataset`: The DataSet object to be retrieved. NB version must be set.
+"""
+function dataset_to_dataframe(store::DataStore, dataset::DataSet)::DataFrame
+    table = get_datasetname(dataset, include_schema=true)
+    sql = "SELECT * FROM $LAKE_ALIAS.$(table)"
+    return DuckDB.query(store.lake, sql) |> DataFrame
 end

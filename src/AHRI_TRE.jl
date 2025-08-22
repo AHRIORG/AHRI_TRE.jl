@@ -243,19 +243,17 @@ end
     savedataframetolake(lake::DBInterface.Connection, df::AbstractDataFrame, name::String, description::String)
 
 Save dataframe to data lake, convert columns of type Missing to Union{String, Missing} for DuckDB compatibility
-NOTE: This function assumes that the ducklake metadatabase is attached as "tre_lake"
+NOTE: This function assumes that the ducklake metadatabase is attached as LAKE_ALIAS
+DEPPRECATED: DataFrames should be saved with a valid DataSet object
 """
 function savedataframetolake(store::DataStore, df::AbstractDataFrame, name::String, description::String)
-    # Save dataframe to data lake
-    # @info df
-    # @info describe
     convert_missing_to_string!(df) # Convert columns of type Missing to Union{String, Missing} for DuckDB compatibility
-    DuckDB.register_table(lake, df, "__DF")
-    sql = "CREATE OR REPLACE TABLE tre_lake.$(name) AS SELECT * FROM __DF"
-    DBInterface.execute(lake, sql)
-    sql = "COMMENT ON TABLE tre_lake.$(name) IS '$(description)'"
-    DBInterface.execute(lake, sql)
-    DuckDB.unregister_table(lake, "__DF")
+    DuckDB.register_table(store.lake, df, "__DF")
+    sql = "CREATE OR REPLACE TABLE $LAKE_ALIAS.$(name) AS SELECT * FROM __DF"
+    DBInterface.execute(store.lake, sql)
+    sql = "COMMENT ON TABLE $LAKE_ALIAS.$(name) IS '$(description)'"
+    DBInterface.execute(store.lake, sql)
+    DuckDB.unregister_table(store.lake, "__DF")
     return nothing
 end
 
@@ -332,35 +330,70 @@ function dataset_variables(db::DBInterface.Connection, dataset::DataSet)::Abstra
     return DBInterface.execute(stmt, (dataset = dataset)) |> DataFrame
 end
 """
+    get_datasetname(dataset::DataSet; include_schema::Bool=false)::String
+
+Return a valid dataset name for the dataset, optionally including the schema (study) name.
+- `dataset`: The DataSet object for which to generate the name.
+- `include_schema`: If true, includes the schema (study) name as a prefix to the dataset name (default is false).
+"""
+function get_datasetname(dataset::DataSet; include_schema::Bool=false)::String
+    if isnothing(dataset.version) || isnothing(dataset.version.asset) || isnothing(dataset.version.asset.name)
+        error("Dataset or its asset name is not defined.")
+    end
+    schema = to_ncname(dataset.version.asset.study.name, strict=true)
+    base_name = to_ncname(dataset.version.asset.name, strict=true)
+    version = to_ncname(string(VersionNumber(dataset.version.major, dataset.version.minor, dataset.version.patch)), strict = true)
+    if include_schema
+        return schema * "." * base_name * version
+    else
+        return base_name * version
+    end
+end
+"""
+    dataset_column(db::DBInterface.Connection, dataset::DataSet, variable::Variable)
+
     dataset_to_arrow(db, dataset, datapath)
 
 Save a dataset in the arrow format
 """
-function dataset_to_arrow(db, dataset, datapath, lake::DuckDB.Connection=nothing)
-    outputdir = joinpath(datapath, "arrowfiles")
+function dataset_to_arrow(store::DataStore, dataset::DataSet, outputdir::String; replace::Bool=false)::String
+    file_name = get_datasetname(dataset) * ".arrow"
+    if !replace && isfile(joinpath(outputdir, file_name))
+        error("File already exists: $(joinpath(outputdir, file_name)). Use `replace=true` to overwrite.")
+    end
+    df = dataset_to_dataframe(store, dataset)
     if !isdir(outputdir)
         mkpath(outputdir)
     end
-    df = dataset_to_dataframe(db, dataset, lake)
-    Arrow.write(joinpath(outputdir, "$(get_datasetname(db,dataset)).arrow"), df, compress=:zstd)
+    Arrow.write(joinpath(outputdir, filename), df, compress=:zstd)
 end
 
 
 """
-    dataset_to_csv(db, dataset_id, datapath, compress)
+    dataset_to_csv(store::DataStore, dataset::DataSet, outputdir::String; replace::Bool=false, compress=false)
 
 Save a dataset in compressed csv format
+- `store`: The DataStore object containing the datastore and datalake connections.
+- `dataset`: The DataSet object to be saved as CSV.
+- `outputdir`: The directory where the CSV file will be saved.
+- `replace`: If true, will overwrite existing files (default is false).
+- `compress`: If true, will save the CSV file in compressed .zst format (default is false).
 """
-function dataset_to_csv(db, dataset_id, datapath, compress=false, lake::DuckDB.Connection=nothing)
-    outputdir = joinpath(datapath, "csvfiles")
+function dataset_to_csv(store::DataStore, dataset::DataSet, outputdir::String; replace::Bool=false, compress=false)
+    file_name = get_datasetname(dataset) * (compress ? ".zst" : ".csv")
+    if !replace && isfile(joinpath(outputdir, file_name))
+        error("File already exists: $(joinpath(outputdir, file_name)). Use `replace=true` to overwrite.")
+    end
     if !isdir(outputdir)
         mkpath(outputdir)
     end
-    df = dataset_to_dataframe(db, dataset_id, lake)
+    df = dataset_to_dataframe(store, dataset)
     if (compress)
-        CSV.write(joinpath(outputdir, "$(get_datasetname(db,dataset_id)).gz"), df, compress=true) #have trouble opening on MacOS
+        open(ZstdCompressorStream, joinpath(outputdir, file_name), "w") do stream
+            CSV.write(stream, df)
+        end
     else
-        CSV.write(joinpath(outputdir, "$(get_datasetname(db,dataset_id)).csv"), df)
+        CSV.write(joinpath(outputdir, file_name), df)
     end
 end
 """
@@ -389,14 +422,14 @@ function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_to
     transaction_begin(conn)
     try
         register_redcap_datadictionary(store, domain.domain_id, api_url, api_token;
-        vocabulary_prefix=vocabulary_prefix, use_transaction=false)
+            vocabulary_prefix=vocabulary_prefix, use_transaction=false)
         @info "Registered REDCap datadictionary for study: $(study.name) in domain: $(domain.name)"
         redcap_info = redcap_project_info(api_url, api_token)
         # Download REDCap records in EAV format
         path = redcap_export_eav(api_url, api_token, forms=forms, fields=fields, decode=true)
         @info "Downloaded REDCap EAV export to: $path"
-        datafile = attach_datafile(store, study, "redcap_$(redcap_info.project_id)_eav", path, 
-                    "http://edamontology.org/format_3752"; description = "REDCap project $(redcap_info.project_id) EAV Export for $(redcap_info.project_title)",compress=true)
+        datafile = attach_datafile(store, study, "redcap_$(redcap_info.project_id)_eav", path,
+            "http://edamontology.org/format_3752"; description="REDCap project $(redcap_info.project_id) EAV Export for $(redcap_info.project_title)", compress=true)
         @info "Attached data file: $(datafile.storage_uri) with digest $(datafile.digest)"
         #Create an ingest transformation to record this ingestion
         commit = git_commit_info(; script_path=caller_file_runtime(2))
@@ -570,16 +603,12 @@ function transform_eav_to_dataset(store::DataStore, datafile::DataFile)::DataSet
         @error "DataFile must have a valid asset version with an associated study"
         return nothing
     end
-    schema = to_ncname(study.name)
-    sql = "CREATE SCHEMA IF NOT EXISTS $(schema);"
-    DuckDB.query(store.lake, sql)
     dataset_name = replace(asset.name, r"_eav$" => "")
     dataset_name = to_ncname(dataset_name)
     if dataset_name == ""
         @error "Dataset name derived from asset name is empty after removing '_eav' suffix"
         return nothing
     end
-    dataset_name = schema * "." * dataset_name
     dataset = create_dataset_meta(store, study, dataset_name, "Dataset from eav file $(asset.name)", datafile)
     transform_eav_to_table!(store, datafile, dataset)
     #Create a transformation to record this ingestion
@@ -598,10 +627,46 @@ function transform_eav_to_dataset(store::DataStore, datafile::DataFile)::DataSet
     add_transformation_input(store, transformation, datafile.version)
     # Add the data set as an output to the transformation
     add_transformation_output(store, transformation, dataset.version)
-    
+
     return dataset
 end
+"""
+    read_dataset(store::DataStore, dataset::DataSet)::AbstractDataFrame
 
+Read a dataset from the TRE datastore and return it as an AbstractDataFrame.
+- `store`: The DataStore object containing the datastore connection.
+- `dataset`: The DataSet object representing the dataset to be read.
+This function retrieves the dataset from the datastore and converts it to an AbstractDataFrame.
+"""
+function read_dataset(store::DataStore, dataset::DataSet)::AbstractDataFrame
+    return dataset_to_dataframe(store, dataset)
+end
+"""
+    read_dataset(store::DataStore, study_name::String, dataset_name::String)::AbstractDataFrame
+
+Read a dataset from the TRE datastore by study name and dataset name.
+- `store`: The DataStore object containing the datastore connection.
+- `study_name`: The name of the study containing the dataset.
+- `dataset_name`: The name of the dataset to be read.
+This function retrieves the study and dataset asset from the datastore, gets the latest version of the dataset,
+and converts it to an AbstractDataFrame.
+"""
+function read_dataset(store::DataStore, study_name::String, dataset_name::String)::AbstractDataFrame
+    study = get_study(store, study_name)
+    if isnothing(study)
+        error("Study not found: $study_name")
+    end
+    asset = get_asset(store, study, dataset_name; include_versions = true, asset_type="dataset")
+    if isnothing(asset)
+        error("Dataset asset not found: $dataset_name in study $study_name")
+    end
+    version = get_latest_version(store, asset)
+    if isnothing(version)
+        error("No versions found for dataset asset: $dataset_name in study $study_name")
+    end
+    dataset = get_dataset(store, version)
+    return dataset_to_dataframe(store, dataset)
+end
 include("constants.jl")
 include("utils.jl")
 include("tredatabase.jl")
