@@ -658,12 +658,11 @@ function read_dataset(store::DataStore, study_name::String, dataset_name::String
     if isnothing(asset)
         error("Dataset asset not found: $dataset_name in study $study_name")
     end
-    version = get_latest_version(store, asset)
+    version = get_latest_version(asset)
     if isnothing(version)
         error("No versions found for dataset asset: $dataset_name in study $study_name")
     end
-    dataset = get_dataset(store, version)
-    return dataset_to_dataframe(store, dataset)
+    return dataset_to_dataframe(store, DataSet(version=version))
 end
 include("constants.jl")
 include("utils.jl")

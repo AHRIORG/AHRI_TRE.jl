@@ -948,6 +948,37 @@ function upsert_study!(study::Study, store::DataStore)::Study
     return study
 end
 """
+    get_study(store::DataStore, id::UUID)::Union{Study,Nothing}
+
+Return a Study object by its UUID in the specified DataStore.
+- `store` is the DataStore object containing the database connection.
+- `id` is the UUID of the study to search for.
+If no study is found, it returns `nothing`.
+"""
+function get_study(store::DataStore, id::UUID)::Union{Study,Nothing}
+    db = store.store
+    sql = raw"""
+        SELECT study_id, name, description, external_id, study_type_id
+          FROM studies
+         WHERE study_id = $1
+         LIMIT 1;
+    """
+    stmt = DBInterface.prepare(db, sql)
+    df = DBInterface.execute(stmt, (string(id),)) |> DataFrame
+    if nrow(df) == 0
+        @info "No study found with ID: $(id)"
+        return nothing
+    end
+    row = df[1, :]
+    return Study(
+        study_id=UUID(row.study_id),
+        name=row.name,
+        description=coalesce(row.description, missing),
+        external_id=row.external_id,
+        study_type_id=row.study_type_id
+    )
+end
+"""
     get_study(store::DataStore, name::AbstractString)::Union{Study,Nothing}
 
 Return a Study object by its name in the specified DataStore.
@@ -1410,14 +1441,14 @@ function get_asset(store::DataStore, study::Study, name::String; include_version
     df = nothing
     if !isnothing(asset_type)
         sql = raw"""
-            SELECT asset_id FROM assets
+            SELECT * FROM assets
             WHERE study_id = $1 AND name = $2 AND asset_type = $3
             LIMIT 1;
         """
         df = DBInterface.execute(DBInterface.prepare(conn, sql), (study.study_id, name, asset_type)) |> DataFrame
     else
         sql = raw"""
-            SELECT asset_id FROM assets
+            SELECT * FROM assets
             WHERE study_id = $1 AND name = $2
             LIMIT 1;
         """
@@ -1426,7 +1457,34 @@ function get_asset(store::DataStore, study::Study, name::String; include_version
     if nrow(df) == 0
         return nothing
     end
-    return get_asset(store, UUID(df[1, :asset_id]))
+    asset = make_asset(store, df[1,:], study, include_versions=include_versions)
+    return asset
+end
+"""
+    make_asset(row::DataFrameRow, study::Study; include_versions=true)::Asset
+
+Helper function to create an Asset object from a DataFrameRow and a Study.
+- `store` is the DataStore object containing the database connection.
+- `row` is a DataFrameRow containing asset data.
+- `study` is the Study object to associate with the asset.
+- `include_versions` is a boolean flag indicating whether to include asset versions in the Asset object.
+This function returns an Asset object with its versions populated if requested.
+"""
+function make_asset(store::DataStore,row::DataFrameRow, study::Study; include_versions=true)::Asset
+    asset = Asset(
+        asset_id=UUID(row.asset_id),
+        study=study,
+        name=row.name,
+        description=coalesce(row.description, missing),
+        asset_type=row.asset_type
+    )
+    if include_versions
+        # Populate asset versions if requested
+        asset.versions = get_assetversions(store, asset)
+    else
+        asset.versions = AssetVersion[]
+    end
+    return asset
 end
 """
     get_asset(store::DataStore, asset_id::UUID)::Union{Asset,Nothing}
@@ -1450,24 +1508,8 @@ function get_asset(store::DataStore, asset_id::UUID; include_versions=true)::Uni
         return nothing
     end
     row = df[1, :]
-    study = get_study(store, row.study_id)
-    if study === nothing
-        @error "Study with ID $(row.study_id) not found"
-        return nothing
-    end
-    asset = Asset(
-        asset_id=row.asset_id,
-        study=study,
-        name=row.name,
-        description=coalesce(row.description, missing),
-        asset_type=row.asset_type
-    )
-    if include_versions
-        # Populate asset versions if requested
-        asset.versions = get_assetversions(store, asset)
-    else
-        asset.versions = AssetVersion[]
-    end
+    study = get_study(store, UUID(row.study_id))
+    asset = make_asset(store, row, study, include_versions=include_versions)
     return asset
 end
 """
