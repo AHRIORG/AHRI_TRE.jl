@@ -2,90 +2,65 @@
 
 This package creates and ingest data for the *AHRI Trusted Research Environment* into a PostgreSQL and ducklake managed data lake.
 
-Datastore creation is done using the [`createdatastore`](@ref) function.
-
 Data ingestion is specific to a study, where a *study* is any research study collecting data about entities and the relationships between these entities.
+
+AHRI_TRE can import data directly from a REDCap project and create the necessary metadata to describe the data in the project.
 
 ## Database Structure
 
 The conceptual model of the *AHRI_TRE* is shown in Figure 1.
 ![Fig 1: AHRI-TRE Conceptual Model](assets/AHRI-TRE_Conceptual_Model.png)
 
-### Data sources
-The origin of the data is described in the following tables:
+### Studies
+A study is described in the following tables:
 
-| Table Name              | Description                                                                   |
-|:----------------------- | :---------------------------------------------------------------------------- |
-| sources                 | The entity responsible for distributing the data                              |
-| sites                   | The surveillance site whre the data collection (or death) occured             |
+| Table Name              | Description                                                                       |
+|:----------------------- | :-------------------------------------------------------------------------------- |
+| studies                 | A research study collecting data about entities and the relationships between them|
+| study_types             | Record different types of studies contributing data to the TRE                    |
+| study_access            | Access control linking users to studies and used in row level security            |
+| study_domains           | Associate studies with domains                                                    |
 
-### Data collection
-The data collection protocol and ethical approval are described in the following tables:
+### Entities
+The entities and the relationships between them are described in the following tables:
 
-| Table Name              | Description                                                                   |
-|:----------------------- | :---------------------------------------------------------------------------- |
-| protocols               | A data collection protocol                                                    |
-| site_protocols          | Links the protocols implemented at a site                                     |
-| protocol_documents      | Documents describing the protocol                                             |
-| ethics                  | An ethics approval for data collection                                        |
-| ethics_documents        | Documents describing the ethical approval                                     |
+| Table Name              | Description                                                                       |
+|:----------------------- | :-------------------------------------------------------------------------------- |
+| entities                | Entities such as individuals, households, etc. and links to public ontologies     |
+| entityrelations         | Relationships between entities, such as household membership, and links to public<br>ontologies |
+| entity_instances        | Specific instances of entities in a study, allows linking of instances,<br>e.g. a person to data assets containing data about that person |
+| relation_instances      | Instances of entity relationships, e.g. the membership of a specific person to<br>an instance of a household |
 
-### Data collection instruments
-The data collection instruments are described in the following tables:
+### Assets
+The data assets containing the data collected by a study are described in the following tables:
 
-| Table Name              | Description                                                                   |
-|:----------------------- | :---------------------------------------------------------------------------- |
-| instrument              | A data collection isnstrument                                                 |
-| instrument_documents    | Documents describing the instrument, or instrument questionnaire              |
-| protocol_instruments    | The instruments covered by a particular protocol                              |
-| instrument_datasets     | Datasets collected by this instrument                                         |
+| Table Name              | Description                                                                     |
+|:----------------------- | :------------------------------------------------------------------------------ |
+| assets                  | Digital assets such as datasets and files contained in the data lake            |
+| data_asset_entities     | Link assets to entity instances, to track instances associated with an asset    |
+| asset_versions          | Used to track different versions of assets                                      |
+| datafiles               | A specific version of a file (binary large object(BLOB)) stored in the data lake|
+| dataset                 | An asset version of tabular dataset managed by `ducklake` in the data lake      |
+| dataset_variables       | The variables associated with the columns in the dataset                        |
 
-### Data ingest
-An instance of a data ingest into the *Reference Death Archive* is described by the following tables:
+### Transformations
+Transformations tracks the process of ingesting, transforming and exporting data from the TRE. This is described in the following tables:
 
-| Table Name              | Description                                                                   |
-|:----------------------- | :---------------------------------------------------------------------------- |
-| data_ingestions         | Records the data ingest instances                                             |
-| transformations         | Documents the data transformation (extraction, transformation and loading)    |
-| transformation_types    | Whether the transformation operates on raw (data ingest) or existing datasets |
-| transformation_statuses | Whether the transformation has been verfied or not                            |
-| ingest_datasets         | The datasets containing the raw data from the data ingest                     |
-| transformation_inputs   | The dataset/s consumed by the transformation for a dataset transformation     |
-| transformation_outputs  | The dataset/s produced by the transformation                                  |
-
-### Data
-The data itself is contained in the following tables:
-
-| Table Name              | Description                                                                   |
-|:----------------------- | :---------------------------------------------------------------------------- |
-| datasets                | The dataset identifier and name                                               |
-| datarows                | The row identifier for each row in the dataset                                |
-| data                    | A variable - value pair for each variable in each row of the dataset          |
-| dataset_variables       | The variables representing each column in the dataset                         |
+| Table Name              | Description                                                                     |
+|:----------------------- | :------------------------------------------------------------------------------ |
+| transformations         | Documents the transformation (ingest, transform, entity instance generation,<br>exporting, and placement in a data repository)|
+| transformation_inputs   | The input data asset/s used by the transformation                               |
+| transformation_outputs  | The data asset/s produced by the transformation                                 |
 
 ### Variables
-The variables representing the data contained in the dataset, is described by the following tables:
+The variables representing the data contained in datasets, is described by the following tables:
 
-| Table Name              | Description                                                                   |
-|:----------------------- | :---------------------------------------------------------------------------- |
-| domains                 | Variable names are unique within a domain                                     |
-| variables               | Documents a variable                                                          |
-| value_types             | Representing the different datatypes, variables can assume                    |
-| vocabularies            | The values a categorical variables can assume, are contained in a vocabulary  |
-| vocabulary_items        | The individual categories (codes) in a vocabulary                             |
-| vocabulary_mapping      | The items of one vocabulary can be mapped to another vocabulary               |
+| Table Name              | Description                                                                     |
+|:----------------------- | :------------------------------------------------------------------------------ |
+| domains                 | Variable names are unique within a domain                                       |
+| variables               | Documents a variable                                                            |
+| value_types             | Representing the different datatypes, variables can assume                      |
+| vocabularies            | The values a categorical variables can assume, are contained in a vocabulary    |
+| vocabulary_items        | The individual categories (codes) in a vocabulary                               |
+| vocabulary_mapping      | The items of one vocabulary can be mapped to those in another vocabulary        |
 
-In the case of the CHAMPS data, the data dictionaries are manually extracted from the data distribution document and saved as csv files in the RDA repository.
-The format of the file is (the field separator is a semi-colon):
- * `Column_Name`: The variable name
- * `Key` : `Yes` if the variable is a key to the data
- * `Description`: The description of the variable, if the description contains more than one line, in the case of a categorical variable, the vocabulary appears from line two onwards as comma separated text containing code and description.
- * `Note`: A note regarding the variable
- * `DataType`: The variable type
-    * `RDA_TYPE_INTEGER` = 1
-    * `RDA_TYPE_FLOAT` = 2
-    * `RDA_TYPE_STRING` = 3
-    * `RDA_TYPE_DATE` = 4
-    * `RDA_TYPE_DATETIME` = 5
-    * `RDA_TYPE_TIME` = 6
-    * `RDA_TYPE_CATEGORY` = 7

@@ -666,7 +666,7 @@ function createassets(conn::DBInterface.Connection)
         digest CHAR(64) NOT NULL,
         CONSTRAINT fk_datafiles_version_id FOREIGN KEY (datafile_id) REFERENCES asset_versions (version_id) ON DELETE CASCADE
     );
-    COMMENT ON TABLE datafiles IS 'Datafiles table to record files in the data lake, linked to asset_versions, files are stored in the data lake by the application';
+    COMMENT ON TABLE datafiles IS 'A specific version of a file (binary large object(BLOB)) stored in the data lake';
     COMMENT ON COLUMN datafiles.datafile_id IS 'Always equivalent to version_id of the asset_versions table';
     COMMENT ON COLUMN datafiles.compressed IS 'If it is compressed it will use zstd compression';
     COMMENT ON COLUMN datafiles.encrypted IS 'Whether the file is encrypted, default is FALSE';
@@ -833,7 +833,7 @@ function createentities(conn::DBInterface.Connection)
         CONSTRAINT fk_data_asset_entities_asset_id FOREIGN KEY (asset_id) REFERENCES assets (asset_id) ON DELETE CASCADE,
         CONSTRAINT fk_data_asset_entities_entity_instance_id FOREIGN KEY (entity_instance_id) REFERENCES entity_instances (instance_id) ON DELETE CASCADE
     );
-    COMMENT ON TABLE data_asset_entities IS 'Data asset entities table to link assets to entity instances, allowing for tracking which entities are associated with specific assets';
+    COMMENT ON TABLE data_asset_entities IS 'Data asset entities table to link assets to entity instances, to track instances associated with an asset';
     COMMENT ON COLUMN data_asset_entities.asset_id IS 'ID of the asset this entity instance is associated with';
     COMMENT ON COLUMN data_asset_entities.entity_instance_id IS 'ID of the entity instance this asset is associated with';
     """
