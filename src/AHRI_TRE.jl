@@ -8,10 +8,8 @@ using ConfigEnv
 using Dates
 using Arrow
 using DataStructures
-using ODBC
 using SHA
 using CSV
-using XLSX
 using FileIO
 using Base64
 using URIs
@@ -31,11 +29,11 @@ export
     createdatastore, opendatastore, closedatastore,
     upsert_study!, upsert_domain!, get_domain, get_study, list_studies, add_study_domain!,
     upsert_entity!, get_entity, upsert_entityrelation!, get_entityrelation, list_domainentities, list_domainrelations,
-    datasetlakename, git_commit_info,
+    git_commit_info,
     lookup_variables, get_eav_variables,
     get_namedkey, get_variable_id, get_variable, get_datasetname, updatevalues, insertdata, insertwithidentity,
     get_table, selectdataframe, prepareselectstatement, dataset_to_dataframe, dataset_to_arrow, dataset_to_csv,
-    dataset_variables, dataset_column, savedataframe,
+    dataset_variables, dataset_column, savedataframe, read_dataset,
     ingest_redcap_project, register_redcap_datadictionary, transform_eav_to_dataset
 
 #region Structure

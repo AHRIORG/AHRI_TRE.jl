@@ -1440,7 +1440,7 @@ If an asset is found, it returns an Asset object with its versions populated.
 function get_asset(store::DataStore, asset_id::UUID; include_versions=true)::Union{Asset,Nothing}
     conn = store.store
     sql = raw"""
-        SELECT asset_id, name, description, external_id, asset_type
+        SELECT asset_id, study_id, name, description, asset_type
           FROM assets
          WHERE asset_id = $1
          LIMIT 1;
