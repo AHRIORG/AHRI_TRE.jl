@@ -128,7 +128,7 @@ function git_commit_info(dir::AbstractString=@__DIR__; short::Bool=true, script_
     root = try
         readchomp(`$(Git.git()) -C $(dir) rev-parse --show-toplevel`)
     catch
-        return (repo_url=nothing, commit=nothing, script_relpath=nothing)
+        return (repo_url="Not in a repository", commit="No commit info", script_relpath=script_path)
     end
 
     # Current commit hash
@@ -142,7 +142,7 @@ function git_commit_info(dir::AbstractString=@__DIR__; short::Bool=true, script_
     # Remote URL (origin)
     repo_url = try
         u = readchomp(`$(Git.git()) -C $(root) config --get remote.origin.url`)
-        isempty(u) ? nothing : _normalize_remote(u)
+        isnothing(u) || isempty(u) ? nothing : _normalize_remote(u)
     catch
         nothing
     end
@@ -153,7 +153,9 @@ function git_commit_info(dir::AbstractString=@__DIR__; short::Bool=true, script_
     catch
         nothing
     end
-
+    isnothing(repo_url) ? "Not in a repository" : repo_url
+    isnothing(commit) ? "No commit info" : commit
+    isnothing(script_relpath) ? "?" : script_relpath
     return (repo_url=repo_url, commit=commit, script_relpath=script_relpath)
 end
 """
@@ -171,14 +173,14 @@ function convert_missing_to_string!(df::DataFrame)
 end
 #region NCName conversion
 _is_start_char(c::Char) = occursin(_RE_START, string(c))
-_is_name_char(c::Char) = occursin(_RE_NAME, string(c))
+_is_name_char(c::Char, strict::Bool=false) = strict ? occursin(_RE_STRICT, string(c)) : occursin(_RE_NAME, string(c))
 
 """
     is_ncname(s::AbstractString) -> Bool
 
 Return true if `s` is a valid NCName (no colon, proper start char, allowed name chars).
 """
-function is_ncname(s::AbstractString)
+function is_ncname(s::AbstractString; strict::Bool=false)
     isempty(s) && return false
     occursin(':', s) && return false
     it = iterate(s)
@@ -189,7 +191,7 @@ function is_ncname(s::AbstractString)
         it = iterate(s, st)
         it === nothing && break
         (c, st) = it
-        _is_name_char(c) || return false
+        _is_name_char(c, strict) || return false
     end
     return true
 end
@@ -204,8 +206,9 @@ Convert `s` into a valid NCName:
 - Removes/condenses repeated `replacement`s.
 - Replaces `:` with `replacement`.
 - Optionally avoids names starting with 'xml' (case-insensitive) by prepending `prefix`.
+- If strict=true, disallows `-` and `.` in names (replaces them too).
 """
-function to_ncname(s::AbstractString; replacement="_", prefix="_", avoid_reserved::Bool=true)
+function to_ncname(s::AbstractString; replacement="_", prefix="_", avoid_reserved::Bool=true, strict::Bool=false)
     t = strip(s)
     # Replace colons outright
     if !isempty(replacement)
@@ -226,14 +229,14 @@ function to_ncname(s::AbstractString; replacement="_", prefix="_", avoid_reserve
         print(io, c)
     else
         print(io, prefix)
-        print(io, _is_name_char(c) ? c : replacement)
+        print(io, _is_name_char(c, strict) ? c : replacement)
     end
 
     while true
         it = iterate(t, st)
         it === nothing && break
         (c, st) = it
-        print(io, _is_name_char(c) ? c : replacement)
+        print(io, _is_name_char(c, strict) ? c : replacement)
     end
 
     out = String(take!(io))
@@ -263,7 +266,11 @@ Safety: refuses to operate on the filesystem root "/".
 """
 function emptydir(path::AbstractString; create::Bool=true, retries::Integer=3, wait::Real=0.2)
     path = abspath(path)
-    real = try realpath(path) catch; path end
+    real = try
+        realpath(path)
+    catch
+        path
+    end
     real == "/" && error("Refusing to operate on root '/'")
 
     if !isdir(path)
@@ -308,4 +315,19 @@ function emptydir(path::AbstractString; create::Bool=true, retries::Integer=3, w
     if !isempty(readdir(path))
         error("Failed to empty $path: some entries remain (likely permission issues or open file handles).")
     end
+end
+"""
+    caller_file_runtime()
+
+Return the file path of the script that called this function at runtime.
+  'level' indicates how many levels up the call stack to go (default 1 = immediate caller).
+"""
+function caller_file_runtime(level::Int=1)
+    for (i, fr) in enumerate(stacktrace())
+        # skip this helper frame
+        if i > level
+            return String(fr.file)
+        end
+    end
+    return nothing
 end

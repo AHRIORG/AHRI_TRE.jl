@@ -1,17 +1,17 @@
 function retry_post(api_url, form; retry=5)::HTTP.Response
-    @info "Posting to REDCap API $(api_url) with form: $(form)"
+    # @info "Posting to REDCap API $(api_url) with form: $(form)"
     resp = nothing
     for attempt in 1:retry
         try
             resp = HTTP.post(api_url; headers=["Content-Type" => "application/x-www-form-urlencoded"], body=form)
-            @info "HTTP Status: $(resp.status)"
+            # @info "HTTP Status: $(resp.status)"
             break
         catch e
             if attempt == retry
                 error("REDCap request failed after $(retry) attempts: $(e)")
             end
-            @info "REDCap request failed (attempt $(attempt)/$(retry)): $(e)"
-            @info "Retrying in $(attempt) seconds..."
+            # @info "REDCap request failed (attempt $(attempt)/$(retry)): $(e)"
+            # @info "Retrying in $(attempt) seconds..."
             sleep(attempt)  # Incremental backoff
         end
     end
@@ -19,7 +19,7 @@ function retry_post(api_url, form; retry=5)::HTTP.Response
     return resp
 end
 function retry_streampost(api_url, headers, form, response_stream; retry=5)::HTTP.Response
-    @info "Posting to REDCap API $(api_url) with form: $(form)"
+    # @info "Posting to REDCap API $(api_url) with form: $(form)"
     resp = nothing
     for attempt in 1:retry
         try
@@ -29,8 +29,8 @@ function retry_streampost(api_url, headers, form, response_stream; retry=5)::HTT
             if attempt == retry
                 error("REDCap request failed after $(retry) attempts: $(e)")
             end
-            @info "REDCap request failed (attempt $(attempt)/$(retry)): $(e)"
-            @info "Retrying in $(attempt) seconds..."
+            # @info "REDCap request failed (attempt $(attempt)/$(retry)): $(e)"
+            # @info "Retrying in $(attempt) seconds..."
             sleep(attempt)  # Incremental backoff
         end
     end
@@ -47,7 +47,7 @@ Do a POST request to the REDCap API with the given body.
 Returns the HTTP response object.
 """
 function redcap_post(api_url, body::AbstractDict; retry=5)::HTTP.Response
-    @info "Posting to REDCap API $(api_url) with body: $(body)"
+    # @info "Posting to REDCap API $(api_url) with body: $(body)"
     form = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k, v) in body], "&")
     resp = retry_post(api_url, form; retry=retry)
     resp.status == 200 || error("REDCap post request failed $(resp.status): $(String(resp.body))")

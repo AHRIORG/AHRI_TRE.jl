@@ -80,9 +80,9 @@ function opendatastore(server::AbstractString, user::AbstractString, password::A
             DBInterface.execute(
                 lake,
                 "ATTACH 'ducklake:postgres:host=$(server) port=$(port) user=$(lake_user) password=$(lake_password) dbname=$(lake_db)' 
-                 AS tre_lake (DATA_PATH '$lake_data', METADATA_SCHEMA 'ducklake_catalog');"
+                 AS $LAKE_ALIAS (DATA_PATH '$lake_data', METADATA_SCHEMA 'ducklake_catalog');"
             )
-            DBInterface.execute(lake, "USE tre_lake;")
+            DBInterface.execute(lake, "USE $LAKE_ALIAS;")
         catch e
             @warn "Could not attach DuckDB lake (postgres extension missing?)" exception = e
         end
@@ -369,7 +369,7 @@ function createtransformations(conn::DBInterface.Connection)
     DO $$
     BEGIN
         IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'transformation_type_enum') THEN
-            CREATE TYPE transformation_type_enum AS ENUM ('ingest','transform','entity','export');
+            CREATE TYPE transformation_type_enum AS ENUM ('ingest','transform','entity','export','repository');
         END IF;
     END$$;
     """
@@ -666,7 +666,7 @@ function createassets(conn::DBInterface.Connection)
         digest CHAR(64) NOT NULL,
         CONSTRAINT fk_datafiles_version_id FOREIGN KEY (datafile_id) REFERENCES asset_versions (version_id) ON DELETE CASCADE
     );
-    COMMENT ON TABLE datafiles IS 'Datafiles table to record files in the data lake, linked to asset_versions, files are stored in the data lake by the application';
+    COMMENT ON TABLE datafiles IS 'A specific version of a file (binary large object(BLOB)) stored in the data lake';
     COMMENT ON COLUMN datafiles.datafile_id IS 'Always equivalent to version_id of the asset_versions table';
     COMMENT ON COLUMN datafiles.compressed IS 'If it is compressed it will use zstd compression';
     COMMENT ON COLUMN datafiles.encrypted IS 'Whether the file is encrypted, default is FALSE';
@@ -833,7 +833,7 @@ function createentities(conn::DBInterface.Connection)
         CONSTRAINT fk_data_asset_entities_asset_id FOREIGN KEY (asset_id) REFERENCES assets (asset_id) ON DELETE CASCADE,
         CONSTRAINT fk_data_asset_entities_entity_instance_id FOREIGN KEY (entity_instance_id) REFERENCES entity_instances (instance_id) ON DELETE CASCADE
     );
-    COMMENT ON TABLE data_asset_entities IS 'Data asset entities table to link assets to entity instances, allowing for tracking which entities are associated with specific assets';
+    COMMENT ON TABLE data_asset_entities IS 'Data asset entities table to link assets to entity instances, to track instances associated with an asset';
     COMMENT ON COLUMN data_asset_entities.asset_id IS 'ID of the asset this entity instance is associated with';
     COMMENT ON COLUMN data_asset_entities.entity_instance_id IS 'ID of the entity instance this asset is associated with';
     """
@@ -914,7 +914,7 @@ function transaction_rollback(conn::DBInterface.Connection)
     return nothing
 end
 """
-    upsert_study!(study::Study, store::DataStore)::Study
+    upsert_study!(store::DataStore, study::Study)::Study
 
 Create or update a study record. If a study with the same name already exists, it updates and returns the study.
 Otherwise, it inserts a new row and returns the new study.
@@ -923,7 +923,10 @@ If `study.study_id` is `nothing`, it inserts a new study and lets PostgreSQL ass
 - 'store' is the DataStore object containing the database connection.
 If the study name is required and it must be unique.
 """
-function upsert_study!(study::Study, store::DataStore)::Study
+function upsert_study!(store::DataStore, study::Study)::Study
+    if isnothing(store)
+        throw(ArgumentError("DataStore cannot be nothing"))
+    end
     db = store.store
     if study.study_id === nothing
         # Insert letting PostgreSQL assign uuidv7() default
@@ -946,6 +949,37 @@ function upsert_study!(study::Study, store::DataStore)::Study
             [study.name, study.description, study.external_id, study.study_type_id])
     end
     return study
+end
+"""
+    get_study(store::DataStore, id::UUID)::Union{Study,Nothing}
+
+Return a Study object by its UUID in the specified DataStore.
+- `store` is the DataStore object containing the database connection.
+- `id` is the UUID of the study to search for.
+If no study is found, it returns `nothing`.
+"""
+function get_study(store::DataStore, id::UUID)::Union{Study,Nothing}
+    db = store.store
+    sql = raw"""
+        SELECT study_id, name, description, external_id, study_type_id
+          FROM studies
+         WHERE study_id = $1
+         LIMIT 1;
+    """
+    stmt = DBInterface.prepare(db, sql)
+    df = DBInterface.execute(stmt, (string(id),)) |> DataFrame
+    if nrow(df) == 0
+        @info "No study found with ID: $(id)"
+        return nothing
+    end
+    row = df[1, :]
+    return Study(
+        study_id=UUID(row.study_id),
+        name=row.name,
+        description=coalesce(row.description, missing),
+        external_id=row.external_id,
+        study_type_id=row.study_type_id
+    )
 end
 """
     get_study(store::DataStore, name::AbstractString)::Union{Study,Nothing}
@@ -1004,7 +1038,7 @@ function list_studies(store::DataStore)::Vector{Study}
     ) for row in eachrow(df)]
 end
 """
-    upsert_domain!(domain::Domain, store::DataStore)::Domain
+    upsert_domain!(store::DataStore, domain::Domain)::Domain
 
 Create or update a domain record. If a domain with the same (name, uri) already
 exists (treating NULL uri correctly), it updates and returns its domain_id.
@@ -1015,7 +1049,10 @@ If the domain has a non-NULL URI, it must be unique with respect to the name and
 If the domain has a NULL URI, it must be unique with respect to the name only, allowing at most one row with a NULL URI for each name.
 This function returns the updated or newly created Domain object with the domain_id set.
 """
-function upsert_domain!(domain::Domain, store::DataStore)::Domain
+function upsert_domain!(store::DataStore, domain::Domain)::Domain
+    if isnothing(store)
+        throw(ArgumentError("DataStore cannot be nothing"))
+    end
     db = store.store
 
     # 1) Does a matching domain already exist?
@@ -1327,6 +1364,43 @@ function list_domainrelations(store::DataStore, domain_id::Int)::DataFrame
     return df
 end
 """
+    list_assets_df(store::DataStore, study::Study; include_versions=true)::DataFrame
+
+Return a DataFrame containing all assets in the specified study.
+- 'store' is the DataStore object containing the database connection.
+- 'study' is the Study object to list assets from.
+- 'include_versions' is a boolean flag indicating whether to include asset versions in the DataFrame.
+If `include_versions` is true, the DataFrame will include asset version details
+"""
+function list_assets_df(store::DataStore, study::Study; include_versions=true)::DataFrame
+    sql = ""
+    if include_versions
+        sql = raw"""
+            SELECT 
+                a.asset_id, a.name, a.description, a.asset_type,
+                a.date_created, a.created_by,
+                v.version_id,
+                v.version_label,
+                v.version_note,
+                v.created_at version_created,
+                v.created_by version_created_by
+            FROM public.assets a
+              JOIN public.asset_versions v USING(asset_id)
+            WHERE v.is_latest = true
+              AND a.study_id = $1
+            ORDER BY a.name;
+        """
+    else
+        sql = raw"""
+            SELECT asset_id, name, description, asset_type
+              FROM assets
+             WHERE study_id = $1
+             ORDER BY name;
+        """
+    end
+    return DBInterface.execute(DBInterface.prepare(store.store, sql), (study.study_id,)) |> DataFrame
+end
+"""
     list_assets(store::DataStore, study::Study; include_versions=true)::Vector{Asset}
 Return a DataFrame containing all assets in the specified study.
 - 'store' is the DataStore object containing the database connection.
@@ -1335,14 +1409,7 @@ Return a DataFrame containing all assets in the specified study.
 The DataFrame will contain all columns from the assets table, ordered by name.
 """
 function list_assets(store::DataStore, study::Study; include_versions=true)::Vector{Asset}
-    sql = raw"""
-        SELECT asset_id, name, description, asset_type
-          FROM assets
-         WHERE study_id = $1
-         ORDER BY name;
-    """
-    conn = store.store
-    df = DBInterface.execute(DBInterface.prepare(conn, sql), (study.study_id,)) |> DataFrame
+    df = list_assets_df(store, study, include_versions=false)
     if nrow(df) == 0
         return Asset[]
     end
@@ -1375,18 +1442,55 @@ end
     If no asset is found, it returns `nothing`.
     If an asset is found, it returns an Asset object 
 """
-function get_asset(store::DataStore, study::Study, name::String)::Union{Asset,Nothing}
+function get_asset(store::DataStore, study::Study, name::String; include_versions=true, asset_type::Union{Nothing,String}=nothing)::Union{Asset,Nothing}
     conn = store.store
-    sql = raw"""
-        SELECT asset_id FROM assets
-        WHERE study_id = $1 AND name = $2
-        LIMIT 1;
-    """
-    df = DBInterface.execute(DBInterface.prepare(conn, sql), (study.study_id, name)) |> DataFrame
+    df = nothing
+    if !isnothing(asset_type)
+        sql = raw"""
+            SELECT * FROM assets
+            WHERE study_id = $1 AND name = $2 AND asset_type = $3
+            LIMIT 1;
+        """
+        df = DBInterface.execute(DBInterface.prepare(conn, sql), (study.study_id, name, asset_type)) |> DataFrame
+    else
+        sql = raw"""
+            SELECT * FROM assets
+            WHERE study_id = $1 AND name = $2
+            LIMIT 1;
+        """
+        df = DBInterface.execute(DBInterface.prepare(conn, sql), (study.study_id, name)) |> DataFrame
+    end
     if nrow(df) == 0
         return nothing
     end
-    return get_asset(store, UUID(df[1, :asset_id]))
+    asset = make_asset(store, df[1,:], study, include_versions=include_versions)
+    return asset
+end
+"""
+    make_asset(row::DataFrameRow, study::Study; include_versions=true)::Asset
+
+Helper function to create an Asset object from a DataFrameRow and a Study.
+- `store` is the DataStore object containing the database connection.
+- `row` is a DataFrameRow containing asset data.
+- `study` is the Study object to associate with the asset.
+- `include_versions` is a boolean flag indicating whether to include asset versions in the Asset object.
+This function returns an Asset object with its versions populated if requested.
+"""
+function make_asset(store::DataStore,row::DataFrameRow, study::Study; include_versions=true)::Asset
+    asset = Asset(
+        asset_id=UUID(row.asset_id),
+        study=study,
+        name=row.name,
+        description=coalesce(row.description, missing),
+        asset_type=row.asset_type
+    )
+    if include_versions
+        # Populate asset versions if requested
+        asset.versions = get_assetversions(store, asset)
+    else
+        asset.versions = AssetVersion[]
+    end
+    return asset
 end
 """
     get_asset(store::DataStore, asset_id::UUID)::Union{Asset,Nothing}
@@ -1400,7 +1504,7 @@ If an asset is found, it returns an Asset object with its versions populated.
 function get_asset(store::DataStore, asset_id::UUID; include_versions=true)::Union{Asset,Nothing}
     conn = store.store
     sql = raw"""
-        SELECT asset_id, name, description, external_id, asset_type
+        SELECT asset_id, study_id, name, description, asset_type
           FROM assets
          WHERE asset_id = $1
          LIMIT 1;
@@ -1410,24 +1514,8 @@ function get_asset(store::DataStore, asset_id::UUID; include_versions=true)::Uni
         return nothing
     end
     row = df[1, :]
-    study = get_study(store, row.study_id)
-    if study === nothing
-        @error "Study with ID $(row.study_id) not found"
-        return nothing
-    end
-    asset = Asset(
-        asset_id=row.asset_id,
-        study=study,
-        name=row.name,
-        description=coalesce(row.description, missing),
-        asset_type=row.asset_type
-    )
-    if include_versions
-        # Populate asset versions if requested
-        asset.versions = get_assetversions(store, asset)
-    else
-        asset.versions = AssetVersion[]
-    end
+    study = get_study(store, UUID(row.study_id))
+    asset = make_asset(store, row, study, include_versions=include_versions)
     return asset
 end
 """
@@ -1473,9 +1561,9 @@ Return the latest AssetVersion for the specified asset.
 - 'asset' is the Asset object for which to retrieve the latest version.
 """
 function get_latest_version(asset::Asset)::Union{AssetVersion,Nothing}
-    # If there are no versions, return nothing
+    # If there are no versions, retrieve them
     if isempty(asset.versions)
-        return nothing
+        asset.versions = get_assetversions(store, asset)
     end
     # Find the version flagged as latest
     idx = findfirst(v -> v.is_latest, asset.versions)
@@ -1675,6 +1763,7 @@ Add a transformation output to the transformation_outputs table.
 - `store`: The DataStore object containing connection details for the datastore.
 - `transformation_id`: The ID of the transformation to which the output belongs.
 - `version_id`: The UUID of the asset version that is the output of the transformation.
+This function will insert a new record into the transformation_outputs table linking the transformation to the asset version.
 """
 function add_transformation_output(store::DataStore, transformation_id::Int, version_id::UUID)::Nothing
     db = store.store
@@ -1687,7 +1776,97 @@ function add_transformation_output(store::DataStore, transformation_id::Int, ver
     DBInterface.execute(stmt, (transformation_id, version_id))
     return nothing
 end
+"""
+    add_transformation_input(store::DataStore, transformation_id::Int, version_id::UUID)::Nothing
 
+Add a transformation input to the transformation_inputs table.
+- `store`: The DataStore object containing connection details for the datastore.
+- `transformation_id`: The ID of the transformation to which the input belongs.
+- `version_id`: The UUID of the asset version that is the input to the transformation.
+This function will insert a new record into the transformation_inputs table linking the transformation to the asset version.
+"""
+function add_transformation_input(store::DataStore, transformation_id::Int, version_id::UUID)::Nothing
+    db = store.store
+    @info "Adding transformation input for transformation ID $(transformation_id) and version ID $(version_id)"
+    sql = raw"""
+        INSERT INTO transformation_inputs (transformation_id, version_id)
+        VALUES ($1, $2);
+    """
+    stmt = DBInterface.prepare(db, sql)
+    DBInterface.execute(stmt, (transformation_id, version_id))
+    return nothing
+end
+"""
+    add_transformation_output(store::DataStore, transformation::Transformation, version::AssetVersion)::Nothing
+
+Add a transformation output to the transformation_outputs table using Transformation and AssetVersion objects.
+- `store`: The DataStore object containing connection details for the datastore.
+- `transformation`: The Transformation object containing the transformation_id.
+- `version`: The AssetVersion object containing the version_id.
+This function checks that both the transformation and version have valid IDs before calling the lower-level function.
+"""
+function add_transformation_output(store::DataStore, transformation::Transformation, version::AssetVersion)::Nothing
+    if transformation.transformation_id === nothing
+        @error "Transformation must have a valid transformation_id to add an output"
+        return nothing
+    end
+    if version.version_id === nothing
+        @error "AssetVersion must have a valid version_id to add as a transformation output"
+        return nothing
+    end
+    add_transformation_output(store, transformation.transformation_id, version.version_id)
+end
+"""
+    add_transformation_input(store::DataStore, transformation::Transformation, version::AssetVersion)::Nothing
+
+Add a transformation input to the transformation_inputs table using Transformation and AssetVersion objects.
+- `store`: The DataStore object containing connection details for the datastore.
+- `transformation`: The Transformation object containing the transformation_id.
+- `version`: The AssetVersion object containing the version_id.
+This function checks that both the transformation and version have valid IDs before calling the lower-level function.
+"""
+function add_transformation_input(store::DataStore, transformation::Transformation, version::AssetVersion)::Nothing
+    if transformation.transformation_id === nothing
+        @error "Transformation must have a valid transformation_id to add an input"
+        return nothing
+    end
+    if version.version_id === nothing
+        @error "AssetVersion must have a valid version_id to add as a transformation input"
+        return nothing
+    end
+    add_transformation_input(store, transformation.transformation_id, version.version_id)
+end
+"""
+    list_study_transformations(store::DataStore, study::Study)::DataFrame
+
+Return a DataFrame containing all transformations associated with assets in the specified study.
+- 'store' is the DataStore object containing the database connection.
+- 'study' is the Study object to list transformations from.
+The DataFrame will contain all columns from the transformations table, ordered by date_created descending.
+"""
+function list_study_transformations(store::DataStore, study::Study)::DataFrame
+    db = store.store
+    sql = raw"""
+    with linked_assets as (
+        select distinct av.asset_id, ti.transformation_id
+        from public.asset_versions av 
+            join public.transformation_inputs ti on av.version_id = ti.version_id
+            join public.assets a on av.asset_id = a.asset_id
+        where a.study_id = $1
+        union 
+        select distinct av.asset_id, ti.transformation_id
+        from public.asset_versions av 
+            join public.transformation_outputs ti on av.version_id = ti.version_id
+            join public.assets a on av.asset_id = a.asset_id
+        where a.study_id = $1
+    )
+    select distinct t.* from public.transformations t
+    join linked_assets l on t.transformation_id = l.transformation_id
+    order by t.date_created desc;
+"""
+    stmt = DBInterface.prepare(db, sql)
+    return DBInterface.execute(stmt, (study.study_id,)) |> DataFrame
+end
 """
     get_eav_variables(store::DataStore, datafile::DataFile)::Vector{Variable}
 
@@ -1844,41 +2023,24 @@ This function wraps the string in single quotes and escapes any existing single 
 """
 quote_sql_str(s::AbstractString) = "'" * replace(s, "'" => "''") * "'"
 """
-    transform_eav_to_dataset(store::DataStore, datafile::DataFile)::DataSet
+    transform_eav_to_table!(store::DataStore, datafile::DataFile, dataset::DataSet)::Nothing
 
-Transform an EAV (Entity-Attribute-Value) data file into a dataset.
+Transform an EAV (Entity-Attribute-Value) data file into a table in the TRE lake.
 - 'store' is the DataStore object containing the database connection.
 - 'datafile' is the DataFile object representing the EAV data file.
-This function creates a new dataset in the database by pivoting the EAV data into a wide format.
+- 'dataset' is the DataSet object representing the target dataset.
+This function creates a new table in the TRE lake by pivoting the EAV data into a wide format.
 It aggregates multiple values for the same field per record into a single column.
-The dataset name is derived from the datafile's asset name, dropping the "_eav" suffix if present.
-Returns a DataSet object representing the transformed data.
+The table name is derived from the dataset's asset name.
 This function assumes the EAV data is stored in a csv table with columns: record, field_name, and value.
 """
-function transform_eav_to_dataset(store::DataStore, datafile::DataFile)::DataSet
-    #set dataset name to the datafile asset name, drop "_eav" suffix if present
-    asset = datafile.version.asset
-    if isnothing(asset)
-        @error "DataFile must have a valid asset version with an associated asset"
-        return nothing
-    end
-    study = asset.study
-    if isnothing(study)
-        @error "DataFile must have a valid asset version with an associated study"
-        return nothing
-    end
-    schema = to_ncname(study.name)
+function transform_eav_to_table!(store::DataStore, datafile::DataFile, dataset::DataSet)::Nothing
+    tbl = LAKE_ALIAS * "." * get_datasetname(dataset, include_schema=true)
+    
+    schema = to_ncname(datafile.version.asset.study.name)
     sql = "CREATE SCHEMA IF NOT EXISTS $(schema);"
     DuckDB.query(store.lake, sql)
-    dataset_name = replace(asset.name, r"_eav$" => "")
-    dataset_name = to_ncname(dataset_name)
-    if dataset_name == ""
-        @error "Dataset name derived from asset name is empty after removing '_eav' suffix"
-        return nothing
-    end
-    dataset_name = schema * "." * dataset_name
-    dataset = create_dataset_meta(store, study, dataset_name, "Dataset from eav file $(asset.name)", datafile)
-    tbl = "tre_lake" * "." * dataset_name
+
     fpath = quote_sql_str(file_uri_to_path(datafile.storage_uri))
     sql = """
     CREATE OR REPLACE TABLE $(tbl) AS
@@ -1925,5 +2087,17 @@ function transform_eav_to_dataset(store::DataStore, datafile::DataFile)::DataSet
     """
     DuckDB.query(store.lake, sql)
     @info "Transformed EAV data from $(fpath) to table $(tbl)"
-    return dataset
+    return nothing
+end
+"""
+    dataset_to_dataframe(store::DataStore, dataset::DataSet)::DataFrame
+
+Retrieve a dataset from store.lake and return as a DataFrame
+- `store`: The DataStore object containing the datastore and datalake connections.
+- `dataset`: The DataSet object to be retrieved. NB version must be set.
+"""
+function dataset_to_dataframe(store::DataStore, dataset::DataSet)::DataFrame
+    table = get_datasetname(dataset, include_schema=true)
+    sql = "SELECT * FROM $LAKE_ALIAS.$(table)"
+    return DuckDB.query(store.lake, sql) |> DataFrame
 end
