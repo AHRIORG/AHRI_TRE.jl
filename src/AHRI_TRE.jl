@@ -430,7 +430,7 @@ function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_to
             "http://edamontology.org/format_3752"; description="REDCap project $(redcap_info.project_id) EAV Export for $(redcap_info.project_title)", compress=true)
         @info "Attached data file: $(datafile.storage_uri) with digest $(datafile.digest)"
         #Create an ingest transformation to record this ingestion
-        commit = git_commit_info(; script_path=caller_file_runtime(2))
+        commit = git_commit_info(; script_path=caller_file_runtime(1))
         transformation = Transformation(
             transformation_type="ingest",
             description="Ingested REDCap project $(redcap_info.project_id) records for project: $(redcap_info.project_title) using AHRI_TRE ingest_redcap_project function",
@@ -610,7 +610,7 @@ function transform_eav_to_dataset(store::DataStore, datafile::DataFile)::DataSet
     dataset = create_dataset_meta(store, study, dataset_name, "Dataset from eav file $(asset.name)", datafile)
     transform_eav_to_table!(store, datafile, dataset)
     #Create a transformation to record this ingestion
-    commit = git_commit_info(; script_path=caller_file_runtime(2))
+    commit = git_commit_info(; script_path=caller_file_runtime(1))
     transformation = Transformation(
         transformation_type="transform",
         description="Transformed eav $(asset.name) to dataset $(dataset_name)",
