@@ -1837,6 +1837,37 @@ function add_transformation_input(store::DataStore, transformation::Transformati
     add_transformation_input(store, transformation.transformation_id, version.version_id)
 end
 """
+    list_study_transformations(store::DataStore, study::Study)::DataFrame
+
+Return a DataFrame containing all transformations associated with assets in the specified study.
+- 'store' is the DataStore object containing the database connection.
+- 'study' is the Study object to list transformations from.
+The DataFrame will contain all columns from the transformations table, ordered by date_created descending.
+"""
+function list_study_transformations(store::DataStore, study::Study)::DataFrame
+    db = store.store
+    sql = raw"""
+    with linked_assets as (
+        select distinct av.asset_id, ti.transformation_id
+        from public.asset_versions av 
+            join public.transformation_inputs ti on av.version_id = ti.version_id
+            join public.assets a on av.asset_id = a.asset_id
+        where a.study_id = $1
+        union 
+        select distinct av.asset_id, ti.transformation_id
+        from public.asset_versions av 
+            join public.transformation_outputs ti on av.version_id = ti.version_id
+            join public.assets a on av.asset_id = a.asset_id
+        where a.study_id = $1
+    )
+    select distinct * from public.transformations t
+    join linked_assets l on t.transformation_id = l.transformation_id
+    order by t.date_created desc;
+"""
+    stmt = DBInterface.prepare(db, sql)
+    return DBInterface.execute(stmt, (study.study_id,)) |> DataFrame
+end
+"""
     get_eav_variables(store::DataStore, datafile::DataFile)::Vector{Variable}
 
 Return a vector of Variable objects representing the EAV variables in the specified DataFile.

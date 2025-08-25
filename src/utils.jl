@@ -128,7 +128,7 @@ function git_commit_info(dir::AbstractString=@__DIR__; short::Bool=true, script_
     root = try
         readchomp(`$(Git.git()) -C $(dir) rev-parse --show-toplevel`)
     catch
-        return (repo_url="Not in a repository", commit="No commit info", script_relpath=@__FILE__)
+        return (repo_url="Not in a repository", commit="No commit info", script_relpath=script_path)
     end
 
     # Current commit hash

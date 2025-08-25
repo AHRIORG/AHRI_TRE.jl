@@ -34,7 +34,7 @@ export
     get_namedkey, get_variable_id, get_variable, get_datasetname, updatevalues, insertdata, insertwithidentity,
     get_table, selectdataframe, prepareselectstatement, dataset_to_dataframe, dataset_to_arrow, dataset_to_csv,
     dataset_variables, dataset_column, savedataframe, read_dataset,
-    ingest_redcap_project, register_redcap_datadictionary, transform_eav_to_dataset
+    ingest_redcap_project, register_redcap_datadictionary, transform_eav_to_dataset, list_study_transformations
 
 #region Structure
 Base.@kwdef mutable struct DataStore
