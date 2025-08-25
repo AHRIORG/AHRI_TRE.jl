@@ -66,6 +66,9 @@ try
     # Read back the dataset as a DataFrame
     df = AHRI_TRE.read_dataset(datastore, dataset)
     @info "Dataset read back as DataFrame with $(nrow(df)) rows and $(ncol(df)) columns."
+    t = list_study_transformations(datastore, study)
+    @info "List of transformations for study $(study.name):"
+    show(t)
 finally
     closedatastore(datastore)
     elapsed = now() - start_time

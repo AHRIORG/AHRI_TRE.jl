@@ -153,7 +153,7 @@ function git_commit_info(dir::AbstractString=@__DIR__; short::Bool=true, script_
     catch
         nothing
     end
-    isnothing(repro_url) ? "Not in a repository" : repro_url
+    isnothing(repo_url) ? "Not in a repository" : repo_url
     isnothing(commit) ? "No commit info" : commit
     isnothing(script_relpath) ? "?" : script_relpath
     return (repo_url=repo_url, commit=commit, script_relpath=script_relpath)
