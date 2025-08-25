@@ -41,7 +41,7 @@ try
         uri="https://apcc.africa",
         description="African Population Cohorts Consortium"
     )
-    domain = upsert_domain!(domain, datastore)
+    domain = upsert_domain!(datastore, domain)
     @info "Domain inserted: $(domain.name) with ID $(domain.domain_id)"
     # Now create a study, or retrieve the study the REDCap project should be associated with
     # Here we assume the study does not exist, so we create it
@@ -51,7 +51,7 @@ try
         external_id="APCC",
         study_type_id=3
     )
-    study = upsert_study!(study, datastore)
+    study = upsert_study!(datastore, study)
     @info "Study created or updated: $(study.name) with ID $(study.study_id)"
     add_study_domain!(datastore, study, domain)
     # Now we can ingest the REDCap project data

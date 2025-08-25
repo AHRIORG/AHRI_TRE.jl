@@ -914,7 +914,7 @@ function transaction_rollback(conn::DBInterface.Connection)
     return nothing
 end
 """
-    upsert_study!(study::Study, store::DataStore)::Study
+    upsert_study!(store::DataStore, study::Study)::Study
 
 Create or update a study record. If a study with the same name already exists, it updates and returns the study.
 Otherwise, it inserts a new row and returns the new study.
@@ -923,7 +923,10 @@ If `study.study_id` is `nothing`, it inserts a new study and lets PostgreSQL ass
 - 'store' is the DataStore object containing the database connection.
 If the study name is required and it must be unique.
 """
-function upsert_study!(study::Study, store::DataStore)::Study
+function upsert_study!(store::DataStore, study::Study)::Study
+    if isnothing(store)
+        throw(ArgumentError("DataStore cannot be nothing"))
+    end
     db = store.store
     if study.study_id === nothing
         # Insert letting PostgreSQL assign uuidv7() default
@@ -1035,7 +1038,7 @@ function list_studies(store::DataStore)::Vector{Study}
     ) for row in eachrow(df)]
 end
 """
-    upsert_domain!(domain::Domain, store::DataStore)::Domain
+    upsert_domain!(store::DataStore, domain::Domain)::Domain
 
 Create or update a domain record. If a domain with the same (name, uri) already
 exists (treating NULL uri correctly), it updates and returns its domain_id.
@@ -1046,7 +1049,10 @@ If the domain has a non-NULL URI, it must be unique with respect to the name and
 If the domain has a NULL URI, it must be unique with respect to the name only, allowing at most one row with a NULL URI for each name.
 This function returns the updated or newly created Domain object with the domain_id set.
 """
-function upsert_domain!(domain::Domain, store::DataStore)::Domain
+function upsert_domain!(store::DataStore, domain::Domain)::Domain
+    if isnothing(store)
+        throw(ArgumentError("DataStore cannot be nothing"))
+    end
     db = store.store
 
     # 1) Does a matching domain already exist?

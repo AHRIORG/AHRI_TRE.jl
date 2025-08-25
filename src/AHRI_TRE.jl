@@ -27,7 +27,7 @@ export
     DataStore, Vocabulary, VocabularyItem, AbstractStudy, Study, Domain, Entity, EntityRelation,
     AbstractAsset, Asset, AbstractAssetVersion, AssetVersion, DataFile, Transformation,
     createdatastore, opendatastore, closedatastore,
-    upsert_study!, upsert_domain!, get_domain, get_study, list_studies, add_study_domain!,
+    upsert_study!, upsert_domain!, get_domain, get_study, list_studies, add_study_domain!, create_study!,
     upsert_entity!, get_entity, upsert_entityrelation!, get_entityrelation, list_domainentities, list_domainrelations,
     git_commit_info,
     lookup_variables, get_eav_variables,
@@ -340,7 +340,7 @@ function get_datasetname(dataset::DataSet; include_schema::Bool=false)::String
     end
     schema = to_ncname(dataset.version.asset.study.name, strict=true)
     base_name = to_ncname(dataset.version.asset.name, strict=true)
-    version = to_ncname(string(VersionNumber(dataset.version.major, dataset.version.minor, dataset.version.patch)), strict = true)
+    version = to_ncname(string(VersionNumber(dataset.version.major, dataset.version.minor, dataset.version.patch)), strict=true)
     if include_schema
         return schema * "." * base_name * version
     else
@@ -654,7 +654,7 @@ function read_dataset(store::DataStore, study_name::String, dataset_name::String
     if isnothing(study)
         error("Study not found: $study_name")
     end
-    asset = get_asset(store, study, dataset_name; include_versions = true, asset_type="dataset")
+    asset = get_asset(store, study, dataset_name; include_versions=true, asset_type="dataset")
     if isnothing(asset)
         error("Dataset asset not found: $dataset_name in study $study_name")
     end
@@ -663,6 +663,25 @@ function read_dataset(store::DataStore, study_name::String, dataset_name::String
         error("No versions found for dataset asset: $dataset_name in study $study_name")
     end
     return dataset_to_dataframe(store, DataSet(version=version))
+end
+"""
+    create_study!(store::DataStore, study::Study, domain::Domain)
+
+Create a new study in the TRE datastore and associate it with a domain.
+- `store`: The DataStore object containing the datastore connection.
+- `study`: The Study object representing the study to be created.
+- `domain`: The Domain object representing the domain to associate with the study.
+This function inserts or updates the study in the datastore and links it to the specified domain.
+"""
+function create_study!(store::DataStore, study::Study, domain::Domain)
+    if isnothing(store)
+        throw(ArgumentError("DataStore cannot be nothing"))
+    end
+    if isnothing(domain) || isnothing(domain.domain_id)
+        throw(ArgumentError("A valid domain with domain_id must be provided"))
+    end
+    upsert_study!(store, study)
+    add_study_domain!(store, study, domain)
 end
 include("constants.jl")
 include("utils.jl")
