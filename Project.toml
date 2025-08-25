@@ -1,7 +1,7 @@
 name = "AHRI_TRE"
 uuid = "401e9bd0-ba2c-459f-b6c2-f0990bf33f34"
 authors = ["Kobus Herbst<kobus.herbst@ahri.org>"]
-version = "0.1.0"
+version = "0.1.1"
 
 [deps]
 Arrow = "69666777-d1a9-59fb-9406-91d4454c9d45"
@@ -42,14 +42,6 @@ UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 tectonic_jll = "d7dd28d6-a5e6-559c-9131-7eb760cdacc5"
 
 [compat]
-CodecZstd = "0.8.6"
-Downloads = "1.6.0"
-Git = "1.4.0"
-OpenSSL = "1.5.0"
-OrderedCollections = "1.8.1"
-SHA = "0.7.0"
-StringEncodings = "0.3.7"
-TranscodingStreams = "0.11.3"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"

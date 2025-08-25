@@ -665,7 +665,7 @@ function read_dataset(store::DataStore, study_name::String, dataset_name::String
     return dataset_to_dataframe(store, DataSet(version=version))
 end
 """
-    create_study!(store::DataStore, study::Study, domain::Domain)
+    create_study!(store::DataStore, study::Study, domain::Domain)::Study
 
 Create a new study in the TRE datastore and associate it with a domain.
 - `store`: The DataStore object containing the datastore connection.
@@ -673,7 +673,7 @@ Create a new study in the TRE datastore and associate it with a domain.
 - `domain`: The Domain object representing the domain to associate with the study.
 This function inserts or updates the study in the datastore and links it to the specified domain.
 """
-function create_study!(store::DataStore, study::Study, domain::Domain)
+function create_study!(store::DataStore, study::Study, domain::Domain)::Study
     if isnothing(store)
         throw(ArgumentError("DataStore cannot be nothing"))
     end
@@ -682,6 +682,7 @@ function create_study!(store::DataStore, study::Study, domain::Domain)
     end
     upsert_study!(store, study)
     add_study_domain!(store, study, domain)
+    return study
 end
 include("constants.jl")
 include("utils.jl")
