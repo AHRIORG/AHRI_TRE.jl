@@ -1860,7 +1860,7 @@ function list_study_transformations(store::DataStore, study::Study)::DataFrame
             join public.assets a on av.asset_id = a.asset_id
         where a.study_id = $1
     )
-    select distinct * from public.transformations t
+    select distinct t.* from public.transformations t
     join linked_assets l on t.transformation_id = l.transformation_id
     order by t.date_created desc;
 """
