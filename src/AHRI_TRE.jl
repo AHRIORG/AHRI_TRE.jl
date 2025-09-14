@@ -34,7 +34,8 @@ export
     get_namedkey, get_variable_id, get_variable, get_datasetname, updatevalues, insertdata, insertwithidentity,
     get_table, selectdataframe, prepareselectstatement, dataset_to_dataframe, dataset_to_arrow, dataset_to_csv,
     dataset_variables, dataset_column, savedataframe, read_dataset,
-    ingest_redcap_project, register_redcap_datadictionary, transform_eav_to_dataset, list_study_transformations
+    ingest_redcap_project, register_redcap_datadictionary, transform_eav_to_dataset, list_study_transformations,
+    create_entity!, create_entity_relation!
 
 #region Structure
 Base.@kwdef mutable struct DataStore
@@ -70,7 +71,7 @@ end
 
 Base.@kwdef mutable struct Entity
     entity_id::Union{Int,Nothing} = nothing
-    domain_id::Int
+    domain::Domain
     uuid::Union{UUID,Nothing} = nothing
     name::String
     description::Union{Missing,String} = missing
@@ -80,9 +81,9 @@ end
 
 Base.@kwdef mutable struct EntityRelation
     entityrelation_id::Union{Int,Nothing} = nothing
-    entity_id_1::Int
-    entity_id_2::Int
-    domain_id::Int
+    subject_entity::Entity #The entity being described
+    object_entity::Entity #The entity that is related to the subject entity
+    domain::Domain
     uuid::Union{UUID,Nothing} = nothing
     name::String
     description::Union{Missing,String} = missing
@@ -289,8 +290,6 @@ function get_variable_id(db::DBInterface.Connection, domain, name)
         return result[1, :variable_id]
     end
 end
-
-
 """
     get_variable(db::DBInterface.Connection, variable_id::Int)
 
@@ -366,8 +365,6 @@ function dataset_to_arrow(store::DataStore, dataset::DataSet, outputdir::String;
     end
     Arrow.write(joinpath(outputdir, filename), df, compress=:zstd)
 end
-
-
 """
     dataset_to_csv(store::DataStore, dataset::DataSet, outputdir::String; replace::Bool=false, compress=false)
 
@@ -633,7 +630,7 @@ function transform_eav_to_dataset(store::DataStore, datafile::DataFile; convert=
         return dataset
     catch e
         transaction_rollback(store)
-        @error "Error transforming EAV to dataset: $(e.message)"
+        @error "Error transforming EAV to dataset: $(e)"
         return nothing
     end
 end
@@ -693,6 +690,91 @@ function create_study!(store::DataStore, study::Study, domain::Domain)::Study
     add_study_domain!(store, study, domain)
     return study
 end
+"""
+    create_entity!(store::DataStore, entity::Entity, domain::Domain)::Entity
+
+Create a new entity in the TRE datastore and associate it with a domain.
+- `store`: The DataStore object containing the datastore connection.
+- `entity`: The Entity object representing the entity to be created.
+- `domain`: The Domain object representing the domain to associate with the entity.
+This function inserts or updates the entity in the datastore and links it to the specified domain.
+"""
+function create_entity!(store::DataStore, entity::Entity, domain::Domain)::Entity
+    if isnothing(store)
+        throw(ArgumentError("DataStore cannot be nothing"))
+    end
+    if isnothing(entity) || isnothing(entity.name)
+        throw(ArgumentError("A valid entity with a name must be provided"))
+    end
+    # Verify domain
+    if isnothing(domain) || isnothing(domain.domain_id)
+        throw(ArgumentError("A valid domain with domain_id must be provided"))
+    end
+    entity.domain = domain
+    upsert_entity!(store, entity)
+    return entity
+end
+"""
+    create_entity_relation!(store::DataStore, entityrelation::EntityRelation, domain::Domain)::EntityRelation
+
+Create a new entity relation in the TRE datastore and associate it with a domain.
+- `store`: The DataStore object containing the datastore connection.
+- `entityrelation`: The EntityRelation object representing the entity relation to be created.
+- `domain`: The Domain object representing the domain to associate with the entity relation.
+This function inserts or updates the entity relation in the datastore and links it to the specified domain.
+"""
+function create_entity_relation!(store::DataStore, entityrelation::EntityRelation, domain::Domain)::EntityRelation
+    if isnothing(store)
+        throw(ArgumentError("DataStore cannot be nothing"))
+    end
+    if isnothing(entityrelation) || isnothing(entityrelation.name)
+        throw(ArgumentError("A valid entity relation with a name must be provided"))
+    end
+    # Verify domain
+    if isnothing(domain) || isnothing(domain.domain_id)
+        throw(ArgumentError("A valid domain with domain_id must be provided"))
+    end
+    # Verify subject and object entities
+    if isnothing(entityrelation.subject_entity) || isnothing(entityrelation.subject_entity.entity_id)
+        throw(ArgumentError("A valid subject entity with entity_id must be provided"))
+    end
+    if isnothing(entityrelation.object_entity) || isnothing(entityrelation.object_entity.entity_id)
+        throw(ArgumentError("A valid object entity with entity_id must be provided"))
+    end
+    entityrelation.domain = domain
+    upsert_entityrelation!(store, entityrelation)
+    return entityrelation
+end
+function create_entity_relation!(store::DataStore, subject_name::String, object_name::String, relation_name::String, 
+                                 domain_name::String, description::Union{Missing,String} = missing)::EntityRelation
+    if isnothing(store)
+        throw(ArgumentError("DataStore cannot be nothing"))
+    end
+    if isnothing(subject_name) || isnothing(object_name) || isnothing(relation_name) || isnothing(domain_name)
+        throw(ArgumentError("Subject name, object name, relation name, and domain name must be provided"))
+    end
+    domain = get_domain(store, domain_name)
+    if isnothing(domain)
+        throw(ArgumentError("Domain not found: $domain_name"))
+    end
+    subject_entity = get_entity(store, domain.domain_id, subject_name)
+    if isnothing(subject_entity)
+        throw(ArgumentError("Subject entity not found: $subject_name in domain $domain_name"))
+    end
+    object_entity = get_entity(store, domain.domain_id, object_name)
+    if isnothing(object_entity)
+        throw(ArgumentError("Object entity not found: $object_name in domain $domain_name"))
+    end
+    entityrelation = EntityRelation(
+        subject_entity=subject_entity,
+        object_entity=object_entity,
+        domain=domain,
+        name=relation_name,
+        description=description
+    )
+    upsert_entityrelation!(store, entityrelation)
+    return entityrelation
+end 
 include("constants.jl")
 include("utils.jl")
 include("tredatabase.jl")
