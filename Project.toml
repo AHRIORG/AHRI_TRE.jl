@@ -1,7 +1,7 @@
 name = "AHRI_TRE"
 uuid = "401e9bd0-ba2c-459f-b6c2-f0990bf33f34"
 authors = ["Kobus Herbst<kobus.herbst@ahri.org>"]
-version = "0.1.6"
+version = "0.1.7"
 
 [deps]
 Arrow = "69666777-d1a9-59fb-9406-91d4454c9d45"

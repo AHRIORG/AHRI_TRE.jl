@@ -219,32 +219,32 @@ end
 
 REDCap field_type and validation -> TRE value_type_id.
 """
-function map_value_type(field_type::AbstractString, validation::Union{Missing,AbstractString})
+function map_value_type(field_type::AbstractString, validation::Union{Missing,AbstractString})::Tuple{Int,Union{Nothing,String}}
     ft = lowercase(String(field_type))
     v = validation === missing ? "" : lowercase(String(validation))
     if ft in ("radio", "dropdown", "yesno", "truefalse")
-        return _VT_ENUM
+        return( _VT_ENUM, nothing)
     elseif ft == "checkbox"
-        return _VT_MULTIRESPONSE
+        return (_VT_MULTIRESPONSE, nothing)
     elseif ft == "calc"
         # often numeric; you may refine with validation
-        return _VT_FLOAT
+        return (_VT_FLOAT, nothing)
     elseif ft == "slider"
-        return _VT_INT
+        return (_VT_INT, nothing)
     elseif ft == "text"
-        if v in ("integer", "number")
-            return v == "integer" ? _VT_INT : _VT_FLOAT
+        if v in ("integer", "number", "number_1dp", "number_2dp", "number_3dp")
+            return v == "integer" ? (_VT_INT, nothing) : (_VT_FLOAT, nothing)
         elseif v in ("date_ymd", "date_mdy", "date_dmy")
-            return _VT_DATE
+            return (_VT_DATE, _VT_FORMATS[v])
         elseif v in ("datetime_ymd", "datetime_mdy", "datetime_dmy", "datetime_seconds_ymd", "datetime_seconds_mdy", "datetime_seconds_dmy")
-            return _VT_DATETIME
+            return (_VT_DATETIME, _VT_FORMATS[v])
         elseif v in ("time", "time_hh_mm_ss")
-            return _VT_TIME
+            return (_VT_TIME, _VT_FORMATS[v])
         else
-            return _VT_STRING
+            return (_VT_STRING, nothing)
         end
     else
-        return _VT_STRING
+        return (_VT_STRING, nothing)
     end
 end
 """
@@ -295,7 +295,8 @@ end
 
 Upserts into variables on (domain_id, name). Returns variable_id.
 """
-function upsert_variable!(db, domain_id::Int, name::String; value_type_id::Int, vocabulary_id::Union{Nothing,Int,Missing,String}=nothing, description=missing, note=missing, keyrole::String="none")
+function upsert_variable!(db, domain_id::Int, name::String; value_type_id::Int, value_format::Union{Nothing,Missing,String},
+    vocabulary_id::Union{Nothing,Int,Missing,String}=nothing, description=missing, note=missing, keyrole::String="none")
     # Normalize optional / nullable parameters to proper SQL NULLs for LibPQ
     if vocabulary_id isa String && lowercase(vocabulary_id) == "nothing"
         vocabulary_id = missing
@@ -303,14 +304,15 @@ function upsert_variable!(db, domain_id::Int, name::String; value_type_id::Int, 
     vid = (vocabulary_id === nothing || vocabulary_id === missing) ? missing : vocabulary_id
     desc = (description === nothing || description === missing) ? missing : description
     nte = (note === nothing || note === missing) ? missing : note
-
+    fmt = (value_format === nothing || value_format === missing) ? missing : value_format
     stmt = DBInterface.prepare(
         db,
         raw"""
-            INSERT INTO variables (domain_id, name, value_type_id, vocabulary_id, description, note, keyrole)
-            VALUES ($1,$2,$3,$4,$5,$6,$7)
+            INSERT INTO variables (domain_id, name, value_type_id, value_format, vocabulary_id, description, note, keyrole)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
             ON CONFLICT (domain_id, name) DO UPDATE
             SET value_type_id = EXCLUDED.value_type_id,
+                value_format  = EXCLUDED.value_format,
                 vocabulary_id = EXCLUDED.vocabulary_id,
                 description   = EXCLUDED.description,
                 note          = EXCLUDED.note,
@@ -318,7 +320,7 @@ function upsert_variable!(db, domain_id::Int, name::String; value_type_id::Int, 
             RETURNING variable_id;
         """
     )
-    df = DBInterface.execute(stmt, (domain_id, name, value_type_id, vid, desc, nte, keyrole)) |> DataFrame
+    df = DBInterface.execute(stmt, (domain_id, name, value_type_id, fmt, vid, desc, nte, keyrole)) |> DataFrame
     return df[1, :variable_id]
 end
 
@@ -341,16 +343,16 @@ Returns a DataFrame with columns: field_name, variable_id, value_type_id, vocabu
 """
 function register_redcap_datadictionary(store::DataStore,
     domain_id::Int, redcap_url::String, redcap_token::String;
-    forms=String[], vocabulary_prefix::String="", use_transaction = true)::DataFrame
+    forms=String[], vocabulary_prefix::String="", use_transaction=true)::DataFrame
     db = store.store
-    if use_transaction 
+    if use_transaction
         transaction_begin(db)
     end
     try
         md = redcap_metadata(redcap_url, redcap_token; forms=forms)
         @info "REDCap metadata downloaded: $(nrow(md)) fields"
         out = DataFrame(field_name=String[], variable_id=Int[], value_type_id=Int[],
-            vocabulary_id=Union{Missing,Int}[], field_type=String[],
+            vocabulary_id=Union{Missing,Int}[], field_type=String[], 
             validation=Union{Missing,String}[], label=Union{Missing,String}[], note=Union{Missing,String}[])
         first_row = true
         for row in eachrow(md)
@@ -367,7 +369,7 @@ function register_redcap_datadictionary(store::DataStore,
                 continue
             end
 
-            vtype_id = map_value_type(ftype, fvalid)
+            vtype_id, value_format = map_value_type(ftype, fvalid)
 
             vocab_id = missing
             if vtype_id == _VT_ENUM || vtype_id == _VT_MULTIRESPONSE
@@ -375,10 +377,10 @@ function register_redcap_datadictionary(store::DataStore,
                 items = parse_redcap_choices(String(coalesce(choices, "")))
                 vocab_id = ensure_vocabulary!(db, vname, "REDCap choices for $(fname)", items)
             end
-
+            value_format = isnothing(value_format) ? missing : value_format
             vocab_arg = (vocab_id === missing) ? missing : Int64(vocab_id)
             variable_id = upsert_variable!(db, domain_id, fname;
-                value_type_id=vtype_id,
+                value_type_id=vtype_id,value_format=value_format,
                 vocabulary_id=vocab_arg,
                 description=flabel,
                 note=fnote,

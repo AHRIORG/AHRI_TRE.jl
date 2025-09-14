@@ -452,6 +452,7 @@ function createvariables(conn::DBInterface.Connection)
         domain_id INTEGER NOT NULL,
         name VARCHAR(80) NOT NULL,
         value_type_id INTEGER NOT NULL,
+        value_format VARCHAR(80) NULL,
         vocabulary_id INTEGER NULL,
         keyrole variable_keyrole_enum NOT NULL DEFAULT 'none',
         description TEXT,
@@ -464,6 +465,8 @@ function createvariables(conn::DBInterface.Connection)
     );
     COMMENT ON TABLE variables IS 'Variables table to record variables with their value types, vocabularies and ontology information';
     COMMENT ON COLUMN variables.name IS 'Name of the variable, should be unique within the domain and comply with xsd:token definition';
+    COMMENT ON COLUMN variables.value_type_id IS 'The type of value for the variable, e.g. integer, float, string, date, datetime, time, enumeration (categorical), multiresponse (multiple categories)';
+    COMMENT ON COLUMN variables.value_format IS 'The format for date and time variables, e.g. %Y-%m-%d for date, %H:%M for time, %Y-%m-%d %H:%M:%S for datetime';
     COMMENT ON COLUMN variables.vocabulary_id IS 'ID of the vocabulary used for categorical variables, NULL for non-categorical variables';
     COMMENT ON COLUMN variables.ontology_namespace IS 'Namespace of the ontology for the variable, e.g. http://purl.obolibrary.org/obo/';
     COMMENT ON COLUMN variables.ontology_class IS 'Class identifier of the ontology for the variable, e.g. EFO_0000408';
@@ -893,18 +896,77 @@ function createmapping(conn::DBInterface.Connection)
     @info "Created variable_mapping table"
     return nothing
 end
+"""
+    transaction_begin(store::DataStore; on_lake::Bool=false)
 
+Begin a transaction on the specified DataStore or its lake connection.
+- 'store' is the DataStore object containing the database connection.
+- 'on_lake' indicates whether to use the lake connection (true) or the main store connection (false).
+If 'on_lake' is true, it begins a transaction on the lake connection.
+If 'on_lake' is false, it begins a transaction on the main data store connection.
+Returns nothing.
+"""
+function transaction_begin(store::DataStore; on_lake::Bool=false)
+    on_lake ? transaction_begin(store.lake) : transaction_begin(store.store)
+end
+"""
+    transaction_begin(conn::DBInterface.Connection)
+
+Begin a transaction on the specified DBInterface.Connection.
+- 'conn' is the DBInterface.Connection object representing the database connection.
+Returns nothing.
+"""
 function transaction_begin(conn::DBInterface.Connection)
     DBInterface.execute(conn, "BEGIN")
     @info "Transaction started"
     return nothing
 end
-function transaction_commit(conn::DBInterface.Connection)
+"""
+    transaction_commit(store::DataStore; on_lake::Bool=false)
+
+Commit a transaction on the specified DataStore or its lake connection.
+- 'store' is the DataStore object containing the database connection.
+- 'on_lake' indicates whether to use the lake connection (true) or the main store connection (false).
+If 'on_lake' is true, it commits the transaction on the lake connection.
+If 'on_lake' is false, it commits the transaction on the main data store connection.
+Returns nothing.
+"""
+function transaction_commit(store::DataStore; on_lake::Bool=false)
+    on_lake ? transaction_commit(store.lake) : transaction_commit(store.store)
+end
+"""
+    transaction_commit(conn::DBInterface.Connection; on_lake::Bool=false)
+
+Commit a transaction on the specified DBInterface.Connection.
+- 'conn' is the DBInterface.Connection object representing the database connection.
+Returns nothing.
+"""
+function transaction_commit(conn::DBInterface.Connection; on_lake::Bool=false)
     DBInterface.execute(conn, "COMMIT")
     @info "Transaction committed"
     return nothing
 end
-function transaction_rollback(conn::DBInterface.Connection)
+"""
+    transaction_rollback(store::DataStore; on_lake::Bool=false)
+
+Rollback a transaction on the specified DataStore or its lake connection.
+- 'store' is the DataStore object containing the database connection.
+- 'on_lake' indicates whether to use the lake connection (true) or the main store connection (false).
+If 'on_lake' is true, it rolls back the transaction on the lake connection.
+If 'on_lake' is false, it rolls back the transaction on the main data store connection.
+Returns nothing.
+"""
+function transaction_rollback(store::DataStore; on_lake::Bool=false)
+    on_lake ? transaction_rollback(store.lake) : transaction_rollback(store.store)
+end
+"""
+    transaction_rollback(conn::DBInterface.Connection; on_lake::Bool=false)
+
+Rollback a transaction on the specified DBInterface.Connection.
+- 'conn' is the DBInterface.Connection object representing the database connection.
+Returns nothing.
+"""
+function transaction_rollback(conn::DBInterface.Connection; on_lake::Bool=false)
     try
         DBInterface.execute(conn, "ROLLBACK")
         @info "Transaction rolled back"
@@ -1081,12 +1143,12 @@ function upsert_domain!(store::DataStore, domain::Domain)::Domain
         domain.domain_id = df[1, :domain_id]
         sql_upd = raw"""
             UPDATE domains
-               SET description = $3
-             WHERE domain_id   = $4
+               SET description = $1
+             WHERE domain_id   = $2
              RETURNING domain_id;
         """
         stmt_upd = DBInterface.prepare(db, sql_upd)
-        DBInterface.execute(stmt_upd, (domain.name, domain.uri, domain.description, domain.domain_id))
+        DBInterface.execute(stmt_upd, (domain.description, domain.domain_id))
     end
 
     return domain
@@ -1463,7 +1525,7 @@ function get_asset(store::DataStore, study::Study, name::String; include_version
     if nrow(df) == 0
         return nothing
     end
-    asset = make_asset(store, df[1,:], study, include_versions=include_versions)
+    asset = make_asset(store, df[1, :], study, include_versions=include_versions)
     return asset
 end
 """
@@ -1476,7 +1538,7 @@ Helper function to create an Asset object from a DataFrameRow and a Study.
 - `include_versions` is a boolean flag indicating whether to include asset versions in the Asset object.
 This function returns an Asset object with its versions populated if requested.
 """
-function make_asset(store::DataStore,row::DataFrameRow, study::Study; include_versions=true)::Asset
+function make_asset(store::DataStore, row::DataFrameRow, study::Study; include_versions=true)::Asset
     asset = Asset(
         asset_id=UUID(row.asset_id),
         study=study,
@@ -2029,14 +2091,15 @@ Transform an EAV (Entity-Attribute-Value) data file into a table in the TRE lake
 - 'store' is the DataStore object containing the database connection.
 - 'datafile' is the DataFile object representing the EAV data file.
 - 'dataset' is the DataSet object representing the target dataset.
+- 'convert' is a boolean flag indicating whether to convert the output table to the value_types defined in the dataset.
 This function creates a new table in the TRE lake by pivoting the EAV data into a wide format.
 It aggregates multiple values for the same field per record into a single column.
 The table name is derived from the dataset's asset name.
 This function assumes the EAV data is stored in a csv table with columns: record, field_name, and value.
 """
-function transform_eav_to_table!(store::DataStore, datafile::DataFile, dataset::DataSet)::Nothing
+function transform_eav_to_table!(store::DataStore, datafile::DataFile, dataset::DataSet; convert=true)::Nothing
     tbl = LAKE_ALIAS * "." * get_datasetname(dataset, include_schema=true)
-    
+
     schema = to_ncname(datafile.version.asset.study.name)
     sql = "CREATE SCHEMA IF NOT EXISTS $(schema);"
     DuckDB.query(store.lake, sql)
@@ -2081,11 +2144,42 @@ function transform_eav_to_table!(store::DataStore, datafile::DataFile, dataset::
             USING any_value(value)   -- or first(value)
             GROUP BY record
         )
-        SELECT * FROM pivoted
-        ORDER BY record
-    ) t
     """
-    DuckDB.query(store.lake, sql)
+    sql2 = ""
+    if !isempty(dataset.variables) && convert
+        sql2 = "SELECT CAST(record AS INTEGER) AS record"
+        for variable in dataset.variables
+            col = quote_ident(variable.name)
+            if variable.value_type_id == TRE_TYPE_CATEGORY
+                sql2 *= ", TRY_CAST($col AS INTEGER) AS $col, $col AS $(col)_raw"
+            elseif variable.value_type_id == TRE_TYPE_INTEGER
+                sql2 *= ", CAST($col AS INTEGER) AS $col"
+            elseif variable.value_type_id == TRE_TYPE_FLOAT
+                sql2 *= ", CAST($col AS DOUBLE) AS $col"
+            elseif variable.value_type_id == TRE_TYPE_DATE
+                sql2 *= ", CAST(strptime($col, '$(variable.value_format)') AS DATE) AS $col"
+            elseif variable.value_type_id == TRE_TYPE_DATETIME
+                sql2 *= ", strptime($col, '$(variable.value_format)') AS $col"
+            elseif variable.value_type_id == TRE_TYPE_TIME
+                sql2 *= ", CAST(strptime($col, '$(variable.value_format)') AS TIME) AS $col"
+            else
+                sql2 *= ", $col"
+            end
+        end
+        sql2 *= """
+            FROM pivoted
+            ORDER BY record
+        ) t;
+        """
+    else
+        sql2 = """
+            SELECT * FROM pivoted
+            ORDER BY record
+        ) t;
+        """
+    end
+    @info "Conversion sql:\n $(sql * sql2)"
+    DuckDB.query(store.lake, sql * sql2)
     @info "Transformed EAV data from $(fpath) to table $(tbl)"
     return nothing
 end

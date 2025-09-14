@@ -150,6 +150,7 @@ Base.@kwdef mutable struct Variable
     domain_id::Int
     name::String
     value_type_id::Int
+    value_format::Union{Missing,String} = missing # Used for data and time formats
     vocabulary_id::Union{Missing,Int} = missing # Reference to a vocabulary if applicable
     keyrole::String = "none" # "none", "record", "external"
     description::Union{Missing,String} = missing
@@ -583,13 +584,14 @@ end
 Transform an EAV (Entity-Attribute-Value) data file into a dataset.
 - 'store' is the DataStore object containing the database connection.
 - 'datafile' is the DataFile object representing the EAV data file.
+- 'convert' indicates whether to convert data types based on variable definitions (default is true).
 This function creates a new dataset in the database by pivoting the EAV data into a wide format.
 It aggregates multiple values for the same field per record into a single column.
 The dataset name is derived from the datafile's asset name, dropping the "_eav" suffix if present.
 Returns a DataSet object representing the transformed data.
 This function assumes the EAV data is stored in a csv table with columns: record, field_name, and value.
 """
-function transform_eav_to_dataset(store::DataStore, datafile::DataFile)::DataSet
+function transform_eav_to_dataset(store::DataStore, datafile::DataFile; convert=true)::DataSet
     #set dataset name to the datafile asset name, drop "_eav" suffix if present
     asset = datafile.version.asset
     if isnothing(asset)
@@ -607,26 +609,33 @@ function transform_eav_to_dataset(store::DataStore, datafile::DataFile)::DataSet
         @error "Dataset name derived from asset name is empty after removing '_eav' suffix"
         return nothing
     end
-    dataset = create_dataset_meta(store, study, dataset_name, "Dataset from eav file $(asset.name)", datafile)
-    transform_eav_to_table!(store, datafile, dataset)
-    #Create a transformation to record this ingestion
-    commit = git_commit_info(; script_path=caller_file_runtime(1))
-    transformation = Transformation(
-        transformation_type="transform",
-        description="Transformed eav $(asset.name) to dataset $(dataset_name)",
-        repository_url=commit.repo_url,
-        commit_hash=commit.commit,
-        file_path=commit.script_relpath
-    )
-    # Save the transformation to the datastore
-    save_transformation!(store, transformation)
-    @info "Created transformation with ID: $(transformation.transformation_id)"
-    # Add the data file as an input to the transformation
-    add_transformation_input(store, transformation, datafile.version)
-    # Add the data set as an output to the transformation
-    add_transformation_output(store, transformation, dataset.version)
-
-    return dataset
+    try
+        transaction_begin(store)
+        dataset = create_dataset_meta(store, study, dataset_name, "Dataset from eav file $(asset.name)", datafile)
+        transform_eav_to_table!(store, datafile, dataset; convert=convert)
+        #Create a transformation to record this ingestion
+        commit = git_commit_info(; script_path=caller_file_runtime(1))
+        transformation = Transformation(
+            transformation_type="transform",
+            description="Transformed eav $(asset.name) to dataset $(dataset_name)",
+            repository_url=commit.repo_url,
+            commit_hash=commit.commit,
+            file_path=commit.script_relpath
+        )
+        # Save the transformation to the datastore
+        save_transformation!(store, transformation)
+        @info "Created transformation with ID: $(transformation.transformation_id)"
+        # Add the data file as an input to the transformation
+        add_transformation_input(store, transformation, datafile.version)
+        # Add the data set as an output to the transformation
+        add_transformation_output(store, transformation, dataset.version)
+        transaction_commit(store)
+        return dataset
+    catch e
+        transaction_rollback(store)
+        @error "Error transforming EAV to dataset: $(e.message)"
+        return nothing
+    end
 end
 """
     read_dataset(store::DataStore, dataset::DataSet)::AbstractDataFrame

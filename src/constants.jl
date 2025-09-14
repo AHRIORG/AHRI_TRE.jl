@@ -39,6 +39,19 @@ const _VT_DATETIME= TRE_TYPE_DATETIME
 const _VT_TIME    = TRE_TYPE_TIME
 const _VT_ENUM    = TRE_TYPE_CATEGORY
 const _VT_MULTIRESPONSE = TRE_TYPE_MULTIRESPONSE
+const _VT_FORMATS = Dict(
+    "date_mdy" => "%m/%d/%Y",
+    "date_dmy" => "%d/%m/%Y",
+    "date_ymd" => "%Y-%m-%d",
+    "datetime_mdy" => "%m/%d/%Y %H:%M",
+    "datetime_dmy" => "%d/%m/%Y %H:%M",
+    "datetime_ymd" => "%Y-%m-%d %H:%M",
+    "datetime_seconds_mdy" => "%m/%d/%Y %H:%M:%S",
+    "datetime_seconds_dmy" => "%d/%m/%Y %H:%M:%S",
+    "datetime_seconds_ymd" => "%Y-%m-%d %H:%M:%S",
+    "time_mm_ss" => "%M:%S",
+    "time" => "%H:%M"
+)
 
 # NCName validation
 # Single-char predicates using Unicode properties.

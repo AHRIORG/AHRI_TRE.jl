@@ -27,9 +27,9 @@ The entities and the relationships between them are described in the following t
 | Table Name              | Description                                                                       |
 |:----------------------- | :-------------------------------------------------------------------------------- |
 | entities                | Entities such as individuals, households, etc. and links to public ontologies     |
-| entityrelations         | Relationships between entities, such as household membership, and links to public<br>ontologies |
-| entity_instances        | Specific instances of entities in a study, allows linking of instances,<br>e.g. a person to data assets containing data about that person |
-| relation_instances      | Instances of entity relationships, e.g. the membership of a specific person to<br>an instance of a household |
+| entityrelations         | Relationships between entities, such as household membership, and links to public ontologies |
+| entity_instances        | Specific instances of entities in a study, allows linking of instances, e.g. a person to data assets containing data about that person |
+| relation_instances      | Instances of entity relationships, e.g. the membership of a specific person to an instance of a household |
 
 ### Assets
 The data assets containing the data collected by a study are described in the following tables:
@@ -48,7 +48,7 @@ Transformations tracks the process of ingesting, transforming and exporting data
 
 | Table Name              | Description                                                                     |
 |:----------------------- | :------------------------------------------------------------------------------ |
-| transformations         | Documents the transformation (ingest, transform, entity instance generation,<br>exporting, and placement in a data repository)|
+| transformations         | Documents the transformation (ingest, transform, entity instance generation, exporting, and placement in a data repository)|
 | transformation_inputs   | The input data asset/s used by the transformation                               |
 | transformation_outputs  | The data asset/s produced by the transformation                                 |
 
