@@ -127,7 +127,7 @@ try
         ontology_class="CLAO_0001460"
     )
     located_in_relation = create_entity_relation!(datastore, located_in_relation, domain)
-    @info "Created entity relation: $(based_in_relation.name) with ID $(based_in_relation.entityrelation_id)"
+    @info "Created entity relation: $(located_in_relation.name) with ID $(located_in_relation.entityrelation_id)"
     contact_relation = EntityRelation(
         subject_entity=cohort_entity,
         object_entity=contact_entity,
@@ -137,7 +137,7 @@ try
         ontology_namespace="http://purl.obolibrary.org/obo/MF#",
         ontology_class="hasAgent")
     contact_relation = create_entity_relation!(datastore, contact_relation, domain)
-    @info "Created entity relation: $(contact_relation.name) with ID $(contact_relation.entity)"
+    @info "Created entity relation: $(contact_relation.name) with ID $(contact_relation.entityrelation_id)"
 finally
     closedatastore(datastore)
     elapsed = now() - start_time

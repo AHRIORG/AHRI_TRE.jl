@@ -1241,7 +1241,7 @@ allowing at most one row with a NULL ontology_namespace or ontology_class for ea
 function upsert_entity!(store::DataStore, entity::Entity)::Entity
     conn = store.store
     if entity.entity_id === nothing
-        @info "Inserting new entity: $(entity.name) in domain ID $(entity.domain_id)"
+        @info "Inserting new entity: $(entity.name) in domain $(entity.domain.name)"
         sql = raw"""
             INSERT INTO entities (domain_id, name, description, ontology_namespace, ontology_class)
             VALUES ($1,$2,$3,$4,$5)
@@ -1704,6 +1704,16 @@ function create_asset(store::DataStore, study::Study, name::String, type::String
 end
 function save_version!(store::DataStore, version::AssetVersion)::AssetVersion
     db = store.store
+    if version.is_latest
+        # If this version is marked as latest, unset the is_latest flag on all other versions of the asset
+        sql_unset = raw"""
+            UPDATE asset_versions
+               SET is_latest = false
+             WHERE asset_id = $1 AND is_latest = true;
+        """
+        stmt_unset = DBInterface.prepare(db, sql_unset)
+        DBInterface.execute(stmt_unset, (version.asset.asset_id,))
+    end
     sql = raw"""
         INSERT INTO asset_versions (asset_id, major, minor, patch, version_note, is_latest, doi)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -1725,6 +1735,7 @@ This function will insert the datafile into the database and associate it with t
 """
 function register_datafile(store::DataStore, datafile::DataFile)
     db = store.store
+    try
     sql = raw"""
         INSERT INTO datafiles (datafile_id, compressed, encrypted, compression_algorithm, storage_uri, edam_format, digest)
         VALUES ($1, $2, $3, $4, $5, $6, $7);
@@ -1732,6 +1743,10 @@ function register_datafile(store::DataStore, datafile::DataFile)
     stmt = DBInterface.prepare(db, sql)
     DBInterface.execute(stmt, (datafile.version.version_id, datafile.compressed, datafile.encrypted,
         datafile.compression_algorithm, datafile.storage_uri, datafile.edam_format, datafile.digest))
+    catch e
+        @error "Failed to register datafile: $e"
+        rethrow(e)
+    end
     return nothing
 end
 """

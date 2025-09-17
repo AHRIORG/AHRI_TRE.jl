@@ -490,7 +490,7 @@ Returns the path to the saved CSV file.
 """
 function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; forms::Vector{String}=String[], fields::Vector{String}=String[], lake_root=ENV["TRE_LAKE_PATH"], decode::Bool=false)::String
     # Ensure output directory exists: <TRE_LAKE_PATH>/ingests
-    out_dir = joinpath(lake_root, "ingests")
+    out_dir = joinpath(lake_root, "REDCap_ingests")
     mkpath(out_dir)
 
     # Choose a random unique filename (csv, since format=csv)
