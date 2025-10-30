@@ -53,6 +53,7 @@ try
     )
     study = upsert_study!(datastore, study)
     @info "Study created or updated: $(study.name) with ID $(study.study_id)"
+    # Link the study to a domain
     add_study_domain!(datastore, study, domain)
     # Now we can ingest the REDCap project data
     @info "Ingesting REDCap project data into the datastore"
@@ -68,6 +69,9 @@ try
     @info "Dataset read back as DataFrame with $(nrow(df)) rows and $(ncol(df)) columns."
     t = list_study_transformations(datastore, study)
     @info "List of transformations for study $(study.name):"
+    show(t)
+    # Show assets in the study
+    t = AHRI_TRE.list_assets_df(datastore, study)
     show(t)
     # Create entities
     cohort_entity = Entity(
