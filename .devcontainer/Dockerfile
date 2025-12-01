@@ -9,6 +9,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential \
         git \
+        git-lfs \
         ca-certificates \
         curl \
         wget \
