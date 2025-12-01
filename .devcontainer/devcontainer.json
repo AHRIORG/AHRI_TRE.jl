@@ -1,0 +1,34 @@
+{
+  "name": "Julia + DuckDB Dev",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+
+  "runArgs": [
+    "--env-file", ".env",
+    "--privileged"
+  ],
+
+  "postStartCommand": "bash /workspace/.devcontainer/mount-samba.sh",
+
+  "remoteUser": "root",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "julialang.language-julia"
+      ],
+      "settings": {
+        // Path inside the container – confirm with `which julia` once
+        "julia.executablePath": "/usr/local/julia/bin/julia",
+
+        // Point the extension at your project environment
+        "julia.environmentPath": "$workspaceFolder"
+      }
+    }
+  }
+}

@@ -33,6 +33,7 @@ ODBC = "be6f12e9-ca4f-5eb2-a339-a4f995cc0291"
 OpenSSL = "4d8831e6-92b7-49fb-bdf8-b643e874388c"
 OrderedCollections = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
 SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 SQLite = "0aa819cd-b072-5ff4-a722-6bc24af294d9"
 StringEncodings = "69024149-9ee7-55f6-a4c4-859efe599b68"
@@ -43,9 +44,6 @@ UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 tectonic_jll = "d7dd28d6-a5e6-559c-9131-7eb760cdacc5"
 
 [compat]
-DuckDB = "1.4.1"
-ODBC = "1.1.2"
-SQLite = "1.6.1"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
