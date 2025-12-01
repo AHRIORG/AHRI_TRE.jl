@@ -16,6 +16,9 @@ makedocs(
 # Documenter can also automatically deploy documentation to gh-pages.
 # See "Hosting Documentation" and deploydocs() in the Documenter manual
 # for more information.
-deploydocs(
-    repo = "github.com/AHRIORG/AHRI_TRE.jl.git"
-)
+# Only deploy in CI (GitHub Actions)
+if get(ENV, "GITHUB_ACTIONS", "false") == "true"
+    deploydocs(
+        repo = "github.com/AHRIORG/AHRI_TRE.jl.git"
+    )
+end

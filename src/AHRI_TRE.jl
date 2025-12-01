@@ -34,7 +34,8 @@ export
     get_namedkey, get_variable_id, get_variable, get_datasetname, updatevalues, insertdata, insertwithidentity,
     get_table, selectdataframe, prepareselectstatement, dataset_to_dataframe, dataset_to_arrow, dataset_to_csv,
     dataset_variables, dataset_column, savedataframe, read_dataset,
-    ingest_redcap_project, register_redcap_datadictionary, transform_eav_to_dataset, list_study_transformations
+    ingest_redcap_project, register_redcap_datadictionary, transform_eav_to_dataset, list_study_transformations,
+    create_entity!, create_entity_relation!
 
 #region Structure
 Base.@kwdef mutable struct DataStore
@@ -70,7 +71,7 @@ end
 
 Base.@kwdef mutable struct Entity
     entity_id::Union{Int,Nothing} = nothing
-    domain_id::Int
+    domain::Domain
     uuid::Union{UUID,Nothing} = nothing
     name::String
     description::Union{Missing,String} = missing
@@ -80,9 +81,9 @@ end
 
 Base.@kwdef mutable struct EntityRelation
     entityrelation_id::Union{Int,Nothing} = nothing
-    entity_id_1::Int
-    entity_id_2::Int
-    domain_id::Int
+    subject_entity::Entity #The entity being described
+    object_entity::Entity #The entity that is related to the subject entity
+    domain::Domain
     uuid::Union{UUID,Nothing} = nothing
     name::String
     description::Union{Missing,String} = missing
@@ -150,6 +151,7 @@ Base.@kwdef mutable struct Variable
     domain_id::Int
     name::String
     value_type_id::Int
+    value_format::Union{Missing,String} = missing # Used for data and time formats
     vocabulary_id::Union{Missing,Int} = missing # Reference to a vocabulary if applicable
     keyrole::String = "none" # "none", "record", "external"
     description::Union{Missing,String} = missing
@@ -288,8 +290,6 @@ function get_variable_id(db::DBInterface.Connection, domain, name)
         return result[1, :variable_id]
     end
 end
-
-
 """
     get_variable(db::DBInterface.Connection, variable_id::Int)
 
@@ -348,8 +348,20 @@ function get_datasetname(dataset::DataSet; include_schema::Bool=false)::String
     end
 end
 """
-    dataset_column(db::DBInterface.Connection, dataset::DataSet, variable::Variable)
+    get_datafilename(datafile::DataFile)::String
 
+Get a valid filename for a datafile based on its asset name and version
+ - `datafile`: The DataFile object for which to generate the filename.
+"""
+function get_datafilename(datafile::DataFile)::String
+    if isnothing(datafile.version) || isnothing(datafile.version.asset) || isnothing(datafile.version.asset.name)
+        error("Dataset or its asset name is not defined.")
+    end
+    base_name = to_ncname(datafile.version.asset.name, strict=true)
+    version = to_ncname(string(VersionNumber(datafile.version.major, datafile.version.minor, datafile.version.patch)), strict=true)
+    return base_name * version
+end
+"""
     dataset_to_arrow(db, dataset, datapath)
 
 Save a dataset in the arrow format
@@ -365,8 +377,6 @@ function dataset_to_arrow(store::DataStore, dataset::DataSet, outputdir::String;
     end
     Arrow.write(joinpath(outputdir, filename), df, compress=:zstd)
 end
-
-
 """
     dataset_to_csv(store::DataStore, dataset::DataSet, outputdir::String; replace::Bool=false, compress=false)
 
@@ -424,7 +434,7 @@ function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_to
         @info "Registered REDCap datadictionary for study: $(study.name) in domain: $(domain.name)"
         redcap_info = redcap_project_info(api_url, api_token)
         # Download REDCap records in EAV format
-        path = redcap_export_eav(api_url, api_token, forms=forms, fields=fields, decode=true)
+        path = redcap_export_eav(api_url, api_token, forms=forms, fields=fields, decode=true, lake_root=joinpath(store.lake_data, study.name))
         @info "Downloaded REDCap EAV export to: $path"
         datafile = attach_datafile(store, study, "redcap_$(redcap_info.project_id)_eav", path,
             "http://edamontology.org/format_3752"; description="REDCap project $(redcap_info.project_id) EAV Export for $(redcap_info.project_title)", compress=true)
@@ -550,6 +560,25 @@ function attach_datafile(store::DataStore, assetversion::AssetVersion, file_path
     # Return the DataFile object
     return datafile
 end
+"""
+    attach_new_datafile_version(store::DataStore, assetversion::AssetVersion, version_note::String,
+    file_path::AbstractString, edam_format::String, bumpmajor::Bool, bumpminor::Bool;
+    compress::Bool=false, encrypt::Bool=false)::DataFile
+
+Attach a new data file as a new version to an existing asset in the TRE datastore.
+- `store`: The DataStore object containing connection details for the datastore.
+- `assetversion`: The existing AssetVersion object to which the new data file version will be attached.
+- `version_note`: A note describing the changes in this new version.
+- `file_path`: The full path including the file name to the new file.
+- `edam_format`: The EDAM format of the new data file (e.g., "http://edamontology.org/format_3752" for a csv file).
+- `bumpmajor`: If true, increments the major version number and resets minor and patch to 0.
+- `bumpminor`: If true, increments the minor version number and resets patch to 0.
+- `compress`: Whether the file should be compressed (default is false). 
+   If true, the file will be compressed using zstd, and the existing file will be replaced with the compressed version.
+- `encrypt`: Whether the file should be encrypted (default is false). **NOT currently implemented**
+This function does not copy the file, it only registers it in the TRE datastore.
+It assumes the file is already in the data lake and creates a new DataFile object associated with a new version of the given asset.
+"""
 function attach_new_datafile_version(store::DataStore, assetversion::AssetVersion, version_note::String,
     file_path::AbstractString, edam_format::String, bumpmajor::Bool, bumpminor::Bool;
     compress::Bool=false, encrypt::Bool=false)::DataFile
@@ -569,9 +598,10 @@ function attach_new_datafile_version(store::DataStore, assetversion::AssetVersio
     assetversion.is_latest = true # Set the new version as the latest
     assetversion.version_id = nothing # Reset version_id to be generated by save_version!
     save_version!(store, assetversion) # Save the updated version
-    datafile.assetversion = assetversion # Associate the data file with the new version
+    datafile.version = assetversion # Associate the data file with the new version
     # Register the data file in the datastore
-    register_datafile(store.store, datafile)
+    @info "Registering new data file version"
+    register_datafile(store, datafile)
     @info "Registered new data file version for asset version: $(assetversion.version_id)"
     # Return the DataFile object
     return datafile
@@ -583,13 +613,14 @@ end
 Transform an EAV (Entity-Attribute-Value) data file into a dataset.
 - 'store' is the DataStore object containing the database connection.
 - 'datafile' is the DataFile object representing the EAV data file.
+- 'convert' indicates whether to convert data types based on variable definitions (default is true).
 This function creates a new dataset in the database by pivoting the EAV data into a wide format.
 It aggregates multiple values for the same field per record into a single column.
 The dataset name is derived from the datafile's asset name, dropping the "_eav" suffix if present.
 Returns a DataSet object representing the transformed data.
 This function assumes the EAV data is stored in a csv table with columns: record, field_name, and value.
 """
-function transform_eav_to_dataset(store::DataStore, datafile::DataFile)::DataSet
+function transform_eav_to_dataset(store::DataStore, datafile::DataFile; convert=true)::DataSet
     #set dataset name to the datafile asset name, drop "_eav" suffix if present
     asset = datafile.version.asset
     if isnothing(asset)
@@ -607,26 +638,33 @@ function transform_eav_to_dataset(store::DataStore, datafile::DataFile)::DataSet
         @error "Dataset name derived from asset name is empty after removing '_eav' suffix"
         return nothing
     end
-    dataset = create_dataset_meta(store, study, dataset_name, "Dataset from eav file $(asset.name)", datafile)
-    transform_eav_to_table!(store, datafile, dataset)
-    #Create a transformation to record this ingestion
-    commit = git_commit_info(; script_path=caller_file_runtime(1))
-    transformation = Transformation(
-        transformation_type="transform",
-        description="Transformed eav $(asset.name) to dataset $(dataset_name)",
-        repository_url=commit.repo_url,
-        commit_hash=commit.commit,
-        file_path=commit.script_relpath
-    )
-    # Save the transformation to the datastore
-    save_transformation!(store, transformation)
-    @info "Created transformation with ID: $(transformation.transformation_id)"
-    # Add the data file as an input to the transformation
-    add_transformation_input(store, transformation, datafile.version)
-    # Add the data set as an output to the transformation
-    add_transformation_output(store, transformation, dataset.version)
-
-    return dataset
+    try
+        transaction_begin(store)
+        dataset = create_dataset_meta(store, study, dataset_name, "Dataset from eav file $(asset.name)", datafile)
+        transform_eav_to_table!(store, datafile, dataset; convert=convert)
+        #Create a transformation to record this ingestion
+        commit = git_commit_info(; script_path=caller_file_runtime(1))
+        transformation = Transformation(
+            transformation_type="transform",
+            description="Transformed eav $(asset.name) to dataset $(dataset_name)",
+            repository_url=commit.repo_url,
+            commit_hash=commit.commit,
+            file_path=commit.script_relpath
+        )
+        # Save the transformation to the datastore
+        save_transformation!(store, transformation)
+        @info "Created transformation with ID: $(transformation.transformation_id)"
+        # Add the data file as an input to the transformation
+        add_transformation_input(store, transformation, datafile.version)
+        # Add the data set as an output to the transformation
+        add_transformation_output(store, transformation, dataset.version)
+        transaction_commit(store)
+        return dataset
+    catch e
+        transaction_rollback(store)
+        @error "Error transforming EAV to dataset: $(e)"
+        return nothing
+    end
 end
 """
     read_dataset(store::DataStore, dataset::DataSet)::AbstractDataFrame
@@ -683,6 +721,235 @@ function create_study!(store::DataStore, study::Study, domain::Domain)::Study
     upsert_study!(store, study)
     add_study_domain!(store, study, domain)
     return study
+end
+"""
+    create_entity!(store::DataStore, entity::Entity, domain::Domain)::Entity
+
+Create a new entity in the TRE datastore and associate it with a domain.
+- `store`: The DataStore object containing the datastore connection.
+- `entity`: The Entity object representing the entity to be created.
+- `domain`: The Domain object representing the domain to associate with the entity.
+This function inserts or updates the entity in the datastore and links it to the specified domain.
+"""
+function create_entity!(store::DataStore, entity::Entity, domain::Domain)::Entity
+    if isnothing(store)
+        throw(ArgumentError("DataStore cannot be nothing"))
+    end
+    if isnothing(entity) || isnothing(entity.name)
+        throw(ArgumentError("A valid entity with a name must be provided"))
+    end
+    # Verify domain
+    if isnothing(domain) || isnothing(domain.domain_id)
+        throw(ArgumentError("A valid domain with domain_id must be provided"))
+    end
+    entity.domain = domain
+    upsert_entity!(store, entity)
+    return entity
+end
+"""
+    create_entity_relation!(store::DataStore, entityrelation::EntityRelation, domain::Domain)::EntityRelation
+
+Create a new entity relation in the TRE datastore and associate it with a domain.
+- `store`: The DataStore object containing the datastore connection.
+- `entityrelation`: The EntityRelation object representing the entity relation to be created.
+- `domain`: The Domain object representing the domain to associate with the entity relation.
+This function inserts or updates the entity relation in the datastore and links it to the specified domain.
+"""
+function create_entity_relation!(store::DataStore, entityrelation::EntityRelation, domain::Domain)::EntityRelation
+    if isnothing(store)
+        throw(ArgumentError("DataStore cannot be nothing"))
+    end
+    if isnothing(entityrelation) || isnothing(entityrelation.name)
+        throw(ArgumentError("A valid entity relation with a name must be provided"))
+    end
+    # Verify domain
+    if isnothing(domain) || isnothing(domain.domain_id)
+        throw(ArgumentError("A valid domain with domain_id must be provided"))
+    end
+    # Verify subject and object entities
+    if isnothing(entityrelation.subject_entity) || isnothing(entityrelation.subject_entity.entity_id)
+        throw(ArgumentError("A valid subject entity with entity_id must be provided"))
+    end
+    if isnothing(entityrelation.object_entity) || isnothing(entityrelation.object_entity.entity_id)
+        throw(ArgumentError("A valid object entity with entity_id must be provided"))
+    end
+    entityrelation.domain = domain
+    upsert_entityrelation!(store, entityrelation)
+    return entityrelation
+end
+"""
+    create_entity_relation!(store::DataStore, subject_name::String, object_name::String, relation_name::String, 
+                                 domain_name::String, description::Union{Missing,String} = missing)::EntityRelation
+
+Create a new entity relation in the TRE datastore by specifying subject and object entity names, relation name, and domain name.
+- `store`: The DataStore object containing the datastore connection.
+- `subject_name`: The name of the subject entity in the relation.
+- `object_name`: The name of the object entity in the relation.
+- `relation_name`: The name of the relation.
+- `domain_name`: The name of the domain to associate with the entity relation.
+- `description`: An optional description of the entity relation (default is missing).
+This function looks up the subject and object entities by name within the specified domain,
+creates the entity relation, and inserts or updates it in the datastore.
+"""
+function create_entity_relation!(store::DataStore, subject_name::String, object_name::String, relation_name::String,
+    domain_name::String, description::Union{Missing,String}=missing)::EntityRelation
+    if isnothing(store)
+        throw(ArgumentError("DataStore cannot be nothing"))
+    end
+    if isnothing(subject_name) || isnothing(object_name) || isnothing(relation_name) || isnothing(domain_name)
+        throw(ArgumentError("Subject name, object name, relation name, and domain name must be provided"))
+    end
+    domain = get_domain(store, domain_name)
+    if isnothing(domain)
+        throw(ArgumentError("Domain not found: $domain_name"))
+    end
+    subject_entity = get_entity(store, domain.domain_id, subject_name)
+    if isnothing(subject_entity)
+        throw(ArgumentError("Subject entity not found: $subject_name in domain $domain_name"))
+    end
+    object_entity = get_entity(store, domain.domain_id, object_name)
+    if isnothing(object_entity)
+        throw(ArgumentError("Object entity not found: $object_name in domain $domain_name"))
+    end
+    entityrelation = EntityRelation(
+        subject_entity=subject_entity,
+        object_entity=object_entity,
+        domain=domain,
+        name=relation_name,
+        description=description
+    )
+    upsert_entityrelation!(store, entityrelation)
+    return entityrelation
+end
+"""
+    ingest_file(store::DataStore, study::Study, asset_name::String, file_path::AbstractString, edam_format::String;
+    description::Union{String,Missing}=missing, compress::Bool=false, encrypt::Bool=false, new_version::Bool=false)::DataFile
+
+Ingest a file into the TRE data lake and register it in the TRE datastore.
+- `store`: The DataStore object containing connection details for the datastore and data lake.
+- `study`: The Study object to associate with the ingested file.
+- `asset_name`: The name of the asset to which the file will be attached. Must comply with xsd:NCName restrictions.
+- `file_path`: The full path including the file name to the file to be ingested.
+- `edam_format`: The EDAM format of the file (e.g., "http://edamontology.org/format_3752" for a csv file).
+- `description`: A description of the data file (default is missing).
+- `compress`: Whether the file should be compressed (default is false). 
+   If true, the file will be compressed using zstd before being copied to the data lake.
+- `encrypt`: Whether the file should be encrypted (default is false). **NOT currently implemented**
+- `new_version`: If true, and an asset with the same name already exists in the study, a new version will be created (default is false).
+This function copies the file to the data lake directory, optionally compresses it,
+and registers it in the TRE datastore as a new asset or a new version of an existing asset.
+It returns the DataFile object representing the ingested file
+"""
+function ingest_file(store::DataStore, study::Study, asset_name::String, file_path::AbstractString, edam_format::String;
+    description::Union{String,Missing}=missing, compress::Bool=false, encrypt::Bool=false, new_version::Bool=false)::Union{DataFile,Nothing}
+    # Check if file exists
+    if !isfile(file_path)
+        throw(ArgumentError("File does not exist: $file_path"))
+    end
+    # Check if asset name is valid NCName
+    if to_ncname(asset_name, strict=true) != asset_name
+        throw(ArgumentError("Asset name must comply with xsd:NCName restrictions: $asset_name"))
+    end
+    # Check if an asset by this name already exists in the study
+    existing_asset = get_asset(store, study, asset_name; include_versions=true, asset_type="file")
+    if !isnothing(existing_asset) && !new_version
+        throw(ArgumentError("Asset with name $asset_name already exists in study $(study.name). Use `new_version=true` to add a new version."))
+    end
+    # if there is an existing asset get the latest version
+    base_name, ext = splitext(basename(file_path))
+    base_name = to_ncname(asset_name, strict=true) # use the asset name instead of the original filename
+    version = to_ncname(string(VersionNumber(1, 0, 0)), strict=true)
+    latest_version = nothing
+    if !isnothing(existing_asset)
+        latest_version = get_latest_version(existing_asset)
+        if isnothing(latest_version)
+            throw(ArgumentError("Existing asset $asset_name has no versions. Cannot add new version."))
+        end
+        version = to_ncname(string(VersionNumber(latest_version.major + 1, latest_version.minor, latest_version.patch)), strict=true)
+    end
+    # Copy the file to the data lake directory
+    dest_path = joinpath(store.lake_data, study.name, base_name * version * ext)
+    mkpath(dirname(dest_path)) # Create directory if it doesn't exist
+    cp(file_path, dest_path, force=true)
+    @info "Copied file to data lake: $dest_path"
+    try
+        transaction_begin(store)
+        if !isnothing(latest_version)
+            datafile = attach_new_datafile_version(store, latest_version, "New version from ingest_datafile", dest_path, edam_format, true, false; compress=compress, encrypt=encrypt)
+        else
+            datafile = attach_datafile(store, study, asset_name, dest_path, edam_format; description=description, compress=compress, encrypt=encrypt)
+        end
+        @info "Ingested data file for asset: $(asset_name) with version ID: $(datafile.version.version_id)"
+        commit = git_commit_info(; script_path=caller_file_runtime(1))
+        transformation = Transformation(
+            transformation_type="ingest",
+            description="Ingesting datafile $(file_path) to $(dest_path) in study $(study.name)",
+            repository_url=commit.repo_url,
+            commit_hash=commit.commit,
+            file_path=commit.script_relpath
+        )
+        # Save the transformation to the datastore
+        save_transformation!(store, transformation)
+        @info "Created transformation with ID: $(transformation.transformation_id)"
+        # Add the data set as an output to the transformation
+        add_transformation_output(store, transformation, datafile.version)
+        transaction_commit(store)
+        return datafile
+    catch e
+        @error "Error ingesting file: $(e)"
+        transaction_rollback(store)
+        if isfile(dest_path)
+            rm(dest_path; force=true)
+            @info "Removed copied file from data lake: $dest_path"
+        end
+        return nothing
+    end
+end
+function sql_to_dataset(store::DataStore, study::Study, dataset_name::String, conn::DBInterface.Connection, sql::String; description::Union{String,Missing}=missing, replace::Bool=false)::DataSet
+    if isnothing(store)
+        throw(ArgumentError("DataStore cannot be nothing"))
+    end
+    if isnothing(study) || isnothing(study.study_id)
+        throw(ArgumentError("A valid study with study_id must be provided"))
+    end
+    if to_ncname(dataset_name, strict=true) != dataset_name
+        throw(ArgumentError("Dataset name must comply with xsd:NCName restrictions: $dataset_name"))
+    end
+    existing_asset = get_asset(store, study, dataset_name; include_versions=true, asset_type="dataset")
+    if !isnothing(existing_asset) && !replace
+        throw(ArgumentError("Dataset asset with name $dataset_name already exists in study $(study.name). Use `replace=true` to replace it with a new version."))
+    end
+    try
+        transaction_begin(store)
+        # Create a temporary table to hold the SQL query results
+        temp_table = "__DF"
+        DBInterface.execute(conn, "DROP TABLE IF EXISTS $temp_table;")
+        DBInterface.execute(conn, "CREATE TABLE $temp_table AS $sql;")
+        # Load the data from the temporary table into the dataset
+        load_table_to_dataset!(store, conn, temp_table, dataset; convert=true)
+        # Drop the temporary table
+        DBInterface.execute(conn, "DROP TABLE IF EXISTS $temp_table;")
+        #Create a transformation to record this ingestion
+        commit = git_commit_info(; script_path=caller_file_runtime(1))
+        transformation = Transformation(
+            transformation_type="transform",
+            description="Transformed SQL query to dataset $(dataset_name)",
+            repository_url=commit.repo_url,
+            commit_hash=commit.commit,
+            file_path=commit.script_relpath
+        )
+        # Save the transformation to the datastore
+        save_transformation!(store, transformation)
+        @info "Created transformation with ID: $(transformation.transformation_id)"
+        # Add the data set as an output to the transformation
+        add_transformation_output(store, transformation, dataset.version)
+        transaction_commit(store)
+        return dataset
+    catch e
+        transaction_rollback(store)
+        @error "Error transforming SQL to dataset: $(e)"
+        return nothing
+    end
 end
 include("constants.jl")
 include("utils.jl")
