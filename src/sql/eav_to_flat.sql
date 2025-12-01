@@ -13,11 +13,17 @@ rest AS (
 	ON field_name
 	USING first("value")
 	GROUP BY record
-)
+),
+flat AS (
 SELECT r.* EXCLUDE(record), m.* EXCLUDE(record)
 FROM rest r
   LEFT JOIN multi m ON r.record = m.record
-ORDER BY r.record;
+)
+SELECT 
+  CAST(record_id AS INTEGER) record_id,
+  CAST(cs_cohort_id AS INTEGER) cs_cohort_id
+FROM flat
+ORDER BY record_id;
 --
 CREATE SCHEMA tre_lake;
 --
@@ -61,7 +67,7 @@ pivoted AS (
 SELECT * FROM pivoted
 ORDER BY record;
 --
-CREATE OR REPLACE TABLE tre_lake."redcap_1194" AS
+-- CREATE OR REPLACE TABLE tre_lake."redcap_1194" AS
 SELECT *
 FROM (
     WITH src AS (
@@ -100,6 +106,16 @@ FROM (
         USING any_value(value)
         GROUP BY record
     )
-    SELECT * FROM pivoted
-    ORDER BY record
+    SELECT
+	  CAST(record_id AS INTEGER) record_id,
+	  CAST(cs_cohort_id AS INTEGER) cs_cohort_id,
+	  CAST(cs_cohort_active AS INTEGER) cs_cohort_active,
+	  CAST(cs_cohort_size AS INTEGER) cs_cohort_size,
+	  CAST(cs_cohort_type AS INTEGER) cs_cohort_type,
+	  CAST(cohort_survey_complete AS INTEGER) cohort_survey_complete,
+      * EXCLUDE(record,record_id,cs_cohort_id,cs_cohort_active,cs_cohort_size, cs_cohort_type,cohort_survey_complete)
+    FROM pivoted
+    ORDER BY record_id
 ) t;
+--
+SELECT * FROM '/Users/kobush/Library/CloudStorage/OneDrive-AHRI/ACDIS/Research Operations/Population Intervention/HDSS 25yr/outputs/enriched_with_citations_with_IF_UPDATED_20250922_071759.csv';
