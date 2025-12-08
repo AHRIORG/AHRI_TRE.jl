@@ -13,6 +13,7 @@
     "--privileged"
   ],
 
+  "postCreateCommand": "bash /workspace/.devcontainer/post-create.sh",
   "postStartCommand": "bash /workspace/.devcontainer/mount-samba.sh",
 
   "remoteUser": "root",
@@ -23,10 +24,7 @@
         "julialang.language-julia"
       ],
       "settings": {
-        // Path inside the container – confirm with `which julia` once
         "julia.executablePath": "/usr/local/julia/bin/julia",
-
-        // Point the extension at your project environment
         "julia.environmentPath": "$workspaceFolder"
       }
     }

@@ -2,17 +2,17 @@
 set -e
 
 # Load environment variables from .env file
-if [ -f /workspace/.env ]; then
-    # Remove carriage returns, spaces around =, and load variables
-    set -a
-    source <(grep -v '^#' /workspace/.env | sed 's/\r$//' | sed 's/ *= */=/g')
-    set +a
+if [ -f "/workspace/.env" ]; then
+    # Remove carriage returns and spaces around = signs, then source
+    source <(sed 's/\r$//' /workspace/.env | sed 's/ *= */=/g' | grep -v '^#' | grep -v '^$')
+else
+    echo "Warning: .env file not found. Skipping Samba mount."
+    exit 0
 fi
 
-# Check if credentials are provided
-if [ -z "$SAMBA_USERNAME" ] || [ -z "$SAMBA_PASSWORD" ]; then
-    echo "Warning: SAMBA_USERNAME or SAMBA_PASSWORD not found in .env file"
-    echo "Samba share will not be mounted"
+# Check if Samba credentials are provided
+if [ -z "${SAMBA_USERNAME}" ] || [ -z "${SAMBA_PASSWORD}" ]; then
+    echo "Samba credentials not found in .env. Skipping mount."
     exit 0
 fi
 
@@ -26,13 +26,11 @@ if mountpoint -q /mnt/lakehouse; then
 fi
 
 # Mount the Samba share
-echo "Mounting Samba share //dbn-pure-nas-01.ahri.org/lakehouse..."
-mount -t cifs //dbn-pure-nas-01.ahri.org/lakehouse /mnt/lakehouse \
-    -o username="$SAMBA_USERNAME",password="$SAMBA_PASSWORD",uid=0,gid=0
-
-if [ $? -eq 0 ]; then
-    echo "Successfully mounted Samba share at /mnt/lakehouse"
+echo "Mounting Samba share..."
+if mount -t cifs //dbn-pure-nas-01.ahri.org/lakehouse /mnt/lakehouse \
+    -o username="${SAMBA_USERNAME}",password="${SAMBA_PASSWORD}",uid=0,gid=0; then
+    echo "✓ Samba share mounted successfully at /mnt/lakehouse"
 else
-    echo "Failed to mount Samba share"
+    echo "✗ Failed to mount Samba share"
     exit 1
 fi

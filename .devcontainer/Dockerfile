@@ -1,4 +1,4 @@
-FROM --platform=${BUILDPLATFORM} julia:trixie
+FROM --platform=${BUILDPLATFORM} julia:latest
 
 ARG TARGETARCH
 
@@ -37,13 +37,5 @@ ENV JULIA_PROJECT=/workspace
 
 # Copy only Project.toml to allow fresh dependency resolution
 COPY Project.toml ./
-
-# Instantiate without precompilation to avoid manifest issues
-# Precompilation will happen naturally on first use in the container
-RUN julia -e 'using Pkg; Pkg.instantiate(); Pkg.add("Revise")'
-
-RUN mkdir -p /root/.julia/config && \
-    printf 'try\n    using Revise\ncatch err\n    @warn "Revise failed to load" err\nend\n' > /root/.julia/config/startup.jl
-
 
 CMD ["julia"]
