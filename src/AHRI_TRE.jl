@@ -4,6 +4,7 @@ using DataFrames
 using LibPQ
 using DBInterface
 using DuckDB
+using SQLite
 using ConfigEnv
 using Dates
 using Arrow
@@ -22,6 +23,7 @@ using OrderedCollections
 using TranscodingStreams
 using CodecZstd
 using Git
+using ODBC
 
 export
     DataStore, Vocabulary, VocabularyItem, AbstractStudy, Study, Domain, Entity, EntityRelation,
@@ -35,7 +37,8 @@ export
     get_table, selectdataframe, prepareselectstatement, dataset_to_dataframe, dataset_to_arrow, dataset_to_csv,
     dataset_variables, dataset_column, savedataframe, read_dataset,
     ingest_redcap_project, register_redcap_datadictionary, transform_eav_to_dataset, list_study_transformations,
-    create_entity!, create_entity_relation!
+    create_entity!, create_entity_relation!,
+    sql_meta
 
 #region Structure
 Base.@kwdef mutable struct DataStore
