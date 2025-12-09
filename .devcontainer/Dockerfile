@@ -17,7 +17,22 @@ RUN apt-get update && \
         postgresql-client \
         libpq-dev \
         cifs-utils \
+        gnupg \
+        apt-transport-https \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Microsoft ODBC Driver 18 for SQL Server
+RUN curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg && \
+    curl -fsSL https://packages.microsoft.com/config/debian/12/prod.list | tee /etc/apt/sources.list.d/mssql-release.list && \
+    apt-get update && \
+    ACCEPT_EULA=Y apt-get install -y --no-install-recommends \
+        msodbcsql18 \
+        mssql-tools18 \
+        unixodbc-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add mssql-tools to PATH
+ENV PATH="$PATH:/opt/mssql-tools18/bin"
 
 # Install the latest DuckDB CLI release that matches the target architecture
 RUN set -eux; \

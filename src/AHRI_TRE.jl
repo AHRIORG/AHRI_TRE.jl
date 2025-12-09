@@ -38,7 +38,8 @@ export
     dataset_variables, dataset_column, savedataframe, read_dataset,
     ingest_redcap_project, register_redcap_datadictionary, transform_eav_to_dataset, list_study_transformations,
     create_entity!, create_entity_relation!,
-    sql_meta
+    sql_meta,
+    mssql_connect, MSSQL_DRIVER_PATH
 
 #region Structure
 Base.@kwdef mutable struct DataStore
@@ -954,9 +955,76 @@ function sql_to_dataset(store::DataStore, study::Study, dataset_name::String, co
         return nothing
     end
 end
+
+#region MSSQL Connection
+"""
+    MSSQL_DRIVER_PATH
+
+Default path to the Microsoft ODBC Driver 18 for SQL Server.
+This is the standard installation path on Debian/Ubuntu systems.
+"""
+const MSSQL_DRIVER_PATH = "/opt/microsoft/msodbcsql18/lib64/libmsodbcsql-18.5.so.1.1"
+
+"""
+    mssql_connect(server::AbstractString, database::AbstractString, 
+                  user::AbstractString, password::AbstractString;
+                  driver_path::AbstractString=MSSQL_DRIVER_PATH,
+                  encrypt::Bool=true, trust_server_cert::Bool=true) -> ODBC.Connection
+
+Create a connection to a Microsoft SQL Server database using ODBC.
+
+# Arguments
+- `server`: The server hostname or IP address (e.g., "myserver.database.windows.net")
+- `database`: The database name to connect to
+- `user`: The username for authentication
+- `password`: The password for authentication
+- `driver_path`: Path to the ODBC driver library (default: MSSQL_DRIVER_PATH)
+- `encrypt`: Whether to use encrypted connection (default: true)
+- `trust_server_cert`: Whether to trust the server certificate (default: true)
+
+# Returns
+An `ODBC.Connection` object.
+
+# Throws
+- `ArgumentError` if the ODBC driver is not found at the specified path
+- ODBC errors if connection fails
+
+# Example
+```julia
+conn = mssql_connect("myserver.database.windows.net", "mydb", "user", "password")
+try
+    result = DBInterface.execute(conn, "SELECT @@VERSION") |> DataFrame
+    println(result)
+finally
+    DBInterface.close!(conn)
+end
+```
+"""
+function mssql_connect(server::AbstractString, database::AbstractString,
+                       user::AbstractString, password::AbstractString;
+                       driver_path::AbstractString=MSSQL_DRIVER_PATH,
+                       encrypt::Bool=true, trust_server_cert::Bool=true)::ODBC.Connection
+    if !isfile(driver_path)
+        throw(ArgumentError("MSSQL ODBC Driver not found at: $driver_path. " *
+                           "Please install msodbcsql18 or specify the correct driver_path."))
+    end
+    
+    conn_string = "Driver=$driver_path;" *
+                 "Server=$server;" *
+                 "Database=$database;" *
+                 "UID=$user;" *
+                 "PWD=$password;" *
+                 "Encrypt=$(encrypt ? "yes" : "no");" *
+                 "TrustServerCertificate=$(trust_server_cert ? "yes" : "no");"
+    
+    return ODBC.Connection(conn_string)
+end
+#endregion
+
 include("constants.jl")
 include("utils.jl")
 include("tredatabase.jl")
 include("redcap.jl")
+include("sql_meta.jl")
 
 end #module
