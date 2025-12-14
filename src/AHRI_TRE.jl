@@ -1025,6 +1025,14 @@ include("constants.jl")
 include("utils.jl")
 include("tredatabase.jl")
 include("redcap.jl")
-include("sql_meta.jl")
+
+# Extract variable metadata from SQL query results
+# The implementation is split into a common file plus per-flavour overrides.
+include("meta_common.jl")
+include("meta_msql.jl")
+include("meta_psql.jl")
+include("meta_mysql.jl")
+include("meta_duckdb.jl")
+include("meta_sqlite.jl")
 
 end #module
