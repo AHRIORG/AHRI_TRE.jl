@@ -66,6 +66,27 @@ end
 #endregion
 
 #region Constraints / Enums
+function get_foreign_key_reference(conn, table_name::AbstractString, column_name::AbstractString,
+                                                                     ::MySQLFlavour)::Union{Nothing,Tuple{String,String}}
+        sql = """
+        SELECT REFERENCED_TABLE_NAME AS referenced_table,
+                     REFERENCED_COLUMN_NAME AS referenced_column
+        FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+        WHERE TABLE_NAME = ?
+            AND COLUMN_NAME = ?
+            AND REFERENCED_TABLE_NAME IS NOT NULL
+        LIMIT 1
+        """
+        try
+                result = DBInterface.execute(conn, sql, [table_name, column_name]) |> DataFrame
+                if nrow(result) > 0
+                        return (String(result[1, :referenced_table]), String(result[1, :referenced_column]))
+                end
+        catch
+        end
+        return nothing
+end
+
 function table_has_primary_key(conn, table_name::AbstractString, column_name::AbstractString, ::MySQLFlavour)::Bool
     sql = """
     SELECT COUNT(*) as cnt

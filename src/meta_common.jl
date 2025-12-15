@@ -171,6 +171,22 @@ function get_column_comment(conn, table_name::AbstractString, column_name::Abstr
 end
 #endregion
 
+#region Foreign Key Inspection
+"""
+    get_foreign_key_reference(conn, table_name::AbstractString, column_name::AbstractString,
+                              flavour::DatabaseFlavour) -> Union{Nothing,Tuple{String,String}}
+
+Return the referenced table/column for a foreign key on `table_name.column_name`,
+or `nothing` if no foreign key relationship can be determined.
+
+Database-specific overrides implement this for each flavour.
+"""
+function get_foreign_key_reference(conn, table_name::AbstractString, column_name::AbstractString,
+                                   ::DatabaseFlavour)::Union{Nothing,Tuple{String,String}}
+    return nothing
+end
+#endregion
+
 #region Code Table Detection
 """
     is_code_table(conn, table_name::AbstractString, pk_column::AbstractString, flavour::DatabaseFlavour) -> Bool
@@ -242,6 +258,11 @@ function get_code_table_vocabulary(conn, table_name::AbstractString, pk_column::
                 desc_col = col.name
             end
         end
+    end
+
+    # Avoid selecting the same column twice (e.g., when the only string column is `name`).
+    if !isnothing(desc_col) && desc_col == string_col
+        desc_col = nothing
     end
 
     if isnothing(string_col)
@@ -506,18 +527,22 @@ function sql_meta(conn, sql::AbstractString, domain_id::Int, flavour::DatabaseFl
             end
         end
 
-        # 2. Check for code table reference (integer column matching table primary key)
-        if value_type_id == TRE_TYPE_INTEGER && table_exists(conn, column_name, flavour)
-            if is_code_table(conn, column_name, column_name, flavour)
-                value_type_id = TRE_TYPE_CATEGORY
-                code_items = get_code_table_vocabulary(conn, column_name, column_name, flavour)
-                if !isempty(code_items)
-                    vocabulary = Vocabulary(
-                        vocabulary_id=nothing,
-                        name="$(column_name)_codes",
-                        description="Code table values from $column_name",
-                        items=code_items
-                    )
+        # 2. Check for code table reference via FOREIGN KEY (integer FK -> small PK code table)
+        if value_type_id == TRE_TYPE_INTEGER && !isnothing(col_table)
+            fk_ref = get_foreign_key_reference(conn, col_table, column_name, flavour)
+            if !isnothing(fk_ref)
+                ref_table, ref_column = fk_ref
+                if is_code_table(conn, ref_table, ref_column, flavour)
+                    value_type_id = TRE_TYPE_CATEGORY
+                    code_items = get_code_table_vocabulary(conn, ref_table, ref_column, flavour)
+                    if !isempty(code_items)
+                        vocabulary = Vocabulary(
+                            vocabulary_id=nothing,
+                            name="$(column_name)_codes",
+                            description="Code table values from $ref_table",
+                            items=code_items
+                        )
+                    end
                 end
             end
         end

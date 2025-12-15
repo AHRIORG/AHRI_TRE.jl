@@ -57,6 +57,35 @@ function get_column_comment(conn, table_name::AbstractString, column_name::Abstr
 end
 #endregion
 
+#region Foreign Key Inspection
+function get_foreign_key_reference(conn, table_name::AbstractString, column_name::AbstractString,
+                                                                     ::PostgreSQLFlavour)::Union{Nothing,Tuple{String,String}}
+        sql = """
+        SELECT ccu.table_name AS referenced_table,
+                     ccu.column_name AS referenced_column
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+            ON tc.constraint_name = kcu.constraint_name
+         AND tc.table_schema = kcu.table_schema
+        JOIN information_schema.constraint_column_usage ccu
+            ON ccu.constraint_name = tc.constraint_name
+         AND ccu.table_schema = tc.table_schema
+        WHERE tc.constraint_type = 'FOREIGN KEY'
+            AND tc.table_name = \$1
+            AND kcu.column_name = \$2
+        LIMIT 1
+        """
+        try
+                result = DBInterface.execute(conn, sql, [table_name, column_name]) |> DataFrame
+                if nrow(result) > 0
+                        return (String(result[1, :referenced_table]), String(result[1, :referenced_column]))
+                end
+        catch
+        end
+        return nothing
+end
+#endregion
+
 #region Constraints / Enums
 function table_has_primary_key(conn, table_name::AbstractString, column_name::AbstractString, ::PostgreSQLFlavour)::Bool
     sql = """

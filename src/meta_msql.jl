@@ -2,7 +2,7 @@
 #region MSSQL Connection
 
 """
-    mssql_connect(server::AbstractString, database::AbstractString, 
+    connect_mssql(server::AbstractString, database::AbstractString,
                   user::AbstractString, password::AbstractString;
                   driver_path::AbstractString=MSSQL_DRIVER_PATH,
                   encrypt::Bool=true, trust_server_cert::Bool=true) -> ODBC.Connection
@@ -27,7 +27,7 @@ An `ODBC.Connection` object.
 
 # Example
 ```julia
-conn = mssql_connect("myserver.database.windows.net", "mydb", "user", "password")
+conn = connect_mssql("myserver.database.windows.net", "mydb", "user", "password")
 try
     result = DBInterface.execute(conn, "SELECT @@VERSION") |> DataFrame
     println(result)
@@ -36,7 +36,7 @@ finally
 end
 ```
 """
-function mssql_connect(server::AbstractString, database::AbstractString,
+function connect_mssql(server::AbstractString, database::AbstractString,
     user::AbstractString, password::AbstractString;
     driver_path::AbstractString=MSSQL_DRIVER_PATH,
     encrypt::Bool=true, trust_server_cert::Bool=true)::ODBC.Connection
@@ -60,6 +60,9 @@ function mssql_connect(server::AbstractString, database::AbstractString,
         return nothing
     end
 end
+
+"""Backward-compatible alias for `connect_mssql`."""
+mssql_connect(args...; kwargs...) = connect_mssql(args...; kwargs...)
 #endregion
 
 #region Type Mapping
@@ -193,6 +196,30 @@ end
 #endregion
 
 #region Constraints / Code Tables
+function get_foreign_key_reference(conn, table_name::AbstractString, column_name::AbstractString,
+                                   ::MSSQLFlavour)::Union{Nothing,Tuple{String,String}}
+    sql = """
+    SELECT TOP 1
+        rt.name AS referenced_table,
+        rc.name AS referenced_column
+    FROM sys.foreign_key_columns fkc
+    JOIN sys.tables pt ON fkc.parent_object_id = pt.object_id
+    JOIN sys.columns pc ON fkc.parent_object_id = pc.object_id AND fkc.parent_column_id = pc.column_id
+    JOIN sys.tables rt ON fkc.referenced_object_id = rt.object_id
+    JOIN sys.columns rc ON fkc.referenced_object_id = rc.object_id AND fkc.referenced_column_id = rc.column_id
+    WHERE pt.name = ?
+      AND pc.name = ?
+    """
+    try
+        result = DBInterface.execute(conn, sql, [table_name, column_name]) |> DataFrame
+        if nrow(result) > 0
+            return (String(result[1, :referenced_table]), String(result[1, :referenced_column]))
+        end
+    catch
+    end
+    return nothing
+end
+
 function table_has_primary_key(conn, table_name::AbstractString, column_name::AbstractString, ::MSSQLFlavour)::Bool
     sql = """
     SELECT COUNT(*) as cnt

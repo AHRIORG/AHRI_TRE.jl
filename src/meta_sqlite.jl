@@ -33,6 +33,21 @@ end
 #endregion
 
 #region Constraints / Code Tables
+function get_foreign_key_reference(conn, table_name::AbstractString, column_name::AbstractString,
+                                   ::SQLiteFlavour)::Union{Nothing,Tuple{String,String}}
+    sql = "PRAGMA foreign_key_list('$table_name')"
+    try
+        result = DBInterface.execute(conn, sql) |> DataFrame
+        for row in eachrow(result)
+            if String(row[:from]) == column_name
+                return (String(row[:table]), String(row[:to]))
+            end
+        end
+    catch
+    end
+    return nothing
+end
+
 function table_has_primary_key(conn, table_name::AbstractString, column_name::AbstractString, ::SQLiteFlavour)::Bool
     sql = "PRAGMA table_info('$table_name')"
     try
