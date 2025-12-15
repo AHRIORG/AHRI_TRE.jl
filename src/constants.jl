@@ -60,3 +60,11 @@ const _RE_START = r"^[_\p{L}]$"
 # NameChar: Letter, Number, combining marks, connector punct, letter modifiers
 const _RE_NAME  = r"^[\p{L}\p{N}\p{Mc}\p{Mn}\p{Pc}\p{Lm}\-\.]+$"
 const _RE_STRICT= r"^[\p{L}\p{N}\p{Mc}\p{Mn}\p{Pc}\p{Lm}]+$"
+
+"""
+    MSSQL_DRIVER_PATH
+
+Default path to the Microsoft ODBC Driver 18 for SQL Server.
+This is the standard installation path on Debian/Ubuntu systems.
+"""
+const MSSQL_DRIVER_PATH = "/opt/microsoft/msodbcsql18/lib64/libmsodbcsql-18.5.so.1.1"

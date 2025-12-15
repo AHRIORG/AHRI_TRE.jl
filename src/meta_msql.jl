@@ -1,4 +1,66 @@
 # meta_msql.jl - MSSQL-specific SQL metadata extraction overrides
+#region MSSQL Connection
+
+"""
+    mssql_connect(server::AbstractString, database::AbstractString, 
+                  user::AbstractString, password::AbstractString;
+                  driver_path::AbstractString=MSSQL_DRIVER_PATH,
+                  encrypt::Bool=true, trust_server_cert::Bool=true) -> ODBC.Connection
+
+Create a connection to a Microsoft SQL Server database using ODBC.
+
+# Arguments
+- `server`: The server hostname or IP address (e.g., "myserver.database.windows.net")
+- `database`: The database name to connect to
+- `user`: The username for authentication
+- `password`: The password for authentication
+- `driver_path`: Path to the ODBC driver library (default: MSSQL_DRIVER_PATH)
+- `encrypt`: Whether to use encrypted connection (default: true)
+- `trust_server_cert`: Whether to trust the server certificate (default: true)
+
+# Returns
+An `ODBC.Connection` object.
+
+# Throws
+- `ArgumentError` if the ODBC driver is not found at the specified path
+- ODBC errors if connection fails
+
+# Example
+```julia
+conn = mssql_connect("myserver.database.windows.net", "mydb", "user", "password")
+try
+    result = DBInterface.execute(conn, "SELECT @@VERSION") |> DataFrame
+    println(result)
+finally
+    DBInterface.close!(conn)
+end
+```
+"""
+function mssql_connect(server::AbstractString, database::AbstractString,
+    user::AbstractString, password::AbstractString;
+    driver_path::AbstractString=MSSQL_DRIVER_PATH,
+    encrypt::Bool=true, trust_server_cert::Bool=true)::ODBC.Connection
+    try
+        if Sys.isapple()
+            ODBC.setunixODBC(; ODBCSYSINI="/opt/homebrew/etc", ODBCINSTINI="odbcinst.ini", ODBCINI="odbc.ini")
+        end
+        connStr = ""
+        if Sys.iswindows()
+            connStr = "Driver=ODBC Driver 18 for SQL Server; SERVER=$(server); DATABASE=$database;Trusted_Connection=yes;TrustServerCertificate=$(trust_server_cert ? "yes" : "no");AutoTranslate=no"
+        elseif Sys.islinux()
+            connStr = "Driver={$driver_path};Server=$(server);Database=$database;UID=$(user);PWD=$(password);TrustServerCertificate=$(trust_server_cert ? "yes" : "no");AutoTranslate=no;"
+        elseif Sys.isapple()
+            connStr = "Driver={/usr/local/lib/libmsodbcsql.18.dylib};Server=$(server);Database=$database;UID=$(user);PWD=$(password);TrustServerCertificate=$(trust_server_cert ? "yes" : "no");AutoTranslate=no;"
+        else
+            error("Unsupported OS for MSSQL connection")
+        end
+        return ODBC.Connection(connStr)
+    catch err
+        @error "Failed to connect to SQL Server $(ENV["SQLServer"]), database $database" exception = err
+        return nothing
+    end
+end
+#endregion
 
 #region Type Mapping
 # MSSQL-specific type mapping
