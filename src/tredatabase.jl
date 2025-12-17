@@ -1726,6 +1726,62 @@ function save_version!(store::DataStore, version::AssetVersion)::AssetVersion
     return version
 end
 """
+    set_version(assetverion::AssetVersion, major::Int, minor::Int, patch::Int)::AssetVersion
+
+Set the version numbers of an AssetVersion object.
+- `assetversion`: The AssetVersion object to update.    
+- `major`: The major version number.
+- `minor`: The minor version number.
+- `patch`: The patch version number.
+Returns the updated AssetVersion object.
+"""
+function set_version(assetverion::AssetVersion, major::Int, minor::Int, patch::Int)::AssetVersion
+    assetversion.major = major
+    assetversion.minor = minor
+    assetversion.patch = patch
+    return assetversion
+end
+"""
+    set_version(assetverion::AssetVersion, version::VersionNumber)::AssetVersion
+
+Set the version numbers of an AssetVersion object using a VersionNumber object.
+- `assetversion`: The AssetVersion object to update.    
+- `version`: The VersionNumber object containing major, minor, and patch numbers.
+Returns the updated AssetVersion object.
+"""
+function set_version(assetverion::AssetVersion, version::VersionNumber)::AssetVersion
+    return set_version(assetverion, version.major, version.minor, version.patch)
+end
+"""
+    save_asset_version!(store::DataStore, existing_asset::Asset, description::String, new_version::Union{VersionNumber,Nothing})
+
+Save a new version of an existing asset in the TRE datastore.
+- `store`: The DataStore object containing connection details for the datastore.
+- `existing_asset`: The existing Asset object for which to create a new version.
+- `description`: A description or note for the new version.
+- `new_version`: An optional VersionNumber object specifying the new version numbers. If `nothing`, the patch number of the latest version will be incremented by 1.
+This function will create and save a new AssetVersion for the existing asset.
+"""
+function save_asset_version!(store::DataStore, existing_asset::Asset, description::String, new_version::Union{VersionNumber,Nothing})
+    if is_nothing(new_version)
+        latest_version = get_latest_version(existing_asset)
+        if isnothing(latest_version)
+            error("No existing versions found for asset $(existing_asset.name)")
+        end
+        new_version = VersionNumber(latest_version.major, latest_version.minor, latest_version.patch + 1)
+    end
+    asset_version = AssetVersion(
+        asset=existing_asset,
+        major=new_version.major,
+        minor=new_version.minor,
+        patch=new_version.patch,
+        note=description,
+        is_latest=true
+    )
+    push!(existing_asset.versions, save_version!(store, asset_version))
+    return nothing
+end
+"""
     register_datafile(store::DataStore, datafile::DataFile)
 
 Register a DataFile in the TRE datastore. The assetversion must already exist in the datastore.
@@ -1736,13 +1792,13 @@ This function will insert the datafile into the database and associate it with t
 function register_datafile(store::DataStore, datafile::DataFile)
     db = store.store
     try
-    sql = raw"""
-        INSERT INTO datafiles (datafile_id, compressed, encrypted, compression_algorithm, storage_uri, edam_format, digest)
-        VALUES ($1, $2, $3, $4, $5, $6, $7);
-    """
-    stmt = DBInterface.prepare(db, sql)
-    DBInterface.execute(stmt, (datafile.version.version_id, datafile.compressed, datafile.encrypted,
-        datafile.compression_algorithm, datafile.storage_uri, datafile.edam_format, datafile.digest))
+        sql = raw"""
+            INSERT INTO datafiles (datafile_id, compressed, encrypted, compression_algorithm, storage_uri, edam_format, digest)
+            VALUES ($1, $2, $3, $4, $5, $6, $7);
+        """
+        stmt = DBInterface.prepare(db, sql)
+        DBInterface.execute(stmt, (datafile.version.version_id, datafile.compressed, datafile.encrypted,
+            datafile.compression_algorithm, datafile.storage_uri, datafile.edam_format, datafile.digest))
     catch e
         @error "Failed to register datafile: $e"
         rethrow(e)
@@ -2021,6 +2077,78 @@ function get_vocabulary(store::DataStore, vocabulary_id::Int)::Union{Vocabulary,
     end
     return vocabulary
 end
+
+"""
+    ensure_vocabulary!(db, vocab::Vocabulary) -> Int
+
+Ensure that `vocab` exists in the datastore `vocabularies` table and (re)load its items into
+`vocabulary_items`.
+
+Returns the `vocabulary_id`.
+"""
+function ensure_vocabulary!(db, vocab::Vocabulary)::Int
+    # Delegate to the string-based helper (defined in redcap.jl) to keep behaviour consistent.
+    desc = coalesce(vocab.description, "")
+    return ensure_vocabulary!(db, vocab.name, desc, vocab.items)
+end
+
+"""
+    save_variables!(store::DataStore, dataset::DataSet)::Nothing
+
+Persist the variable metadata attached to `dataset.variables` into the datastore metadata tables:
+
+- Upserts rows in `variables` (unique on `(domain_id, name)`)
+- Creates/updates vocabularies and vocabulary_items for categorical/multiresponse variables
+- Links the dataset version to its variables in `dataset_variables`
+
+On return, each `Variable` in `dataset.variables` will have `variable_id` (and where applicable
+`vocabulary_id`) populated.
+"""
+function save_variables!(store::DataStore, dataset::DataSet)::Nothing
+    db = store.store
+    if isnothing(db)
+        throw(ArgumentError("No datastore connection available in store.store"))
+    end
+    if isnothing(dataset.version) || isnothing(dataset.version.version_id)
+        throw(ArgumentError("Dataset must have a persisted version (dataset.version.version_id)"))
+    end
+
+    for var in dataset.variables
+        # Resolve vocabulary_id if this variable carries a vocabulary payload.
+        vocab_id = missing
+        if var.value_type_id in (TRE_TYPE_CATEGORY, TRE_TYPE_MULTIRESPONSE)
+            if !ismissing(var.vocabulary)
+                vocab_id = ensure_vocabulary!(db, var.vocabulary)
+                var.vocabulary_id = Int(vocab_id)
+                var.vocabulary.vocabulary_id = Int(vocab_id)
+            elseif !(var.vocabulary_id === missing)
+                vocab_id = Int(var.vocabulary_id)
+            end
+        end
+
+        value_format = (var.value_format === nothing) ? missing : var.value_format
+        vocabulary_arg = (vocab_id === missing) ? missing : Int(vocab_id)
+
+        # Upsert variable record and capture variable_id.
+        variable_id = upsert_variable!(
+            db,
+            var.domain_id,
+            var.name;
+            value_type_id=var.value_type_id,
+            value_format=value_format,
+            vocabulary_id=vocabulary_arg,
+            description=var.description,
+            note=missing,
+            keyrole=var.keyrole
+        )
+        var.variable_id = Int(variable_id)
+    end
+
+    # Link dataset to its variables
+    register_dataset_variables(store, dataset)
+    return nothing
+end
+
 function register_dataset_variables(store::DataStore, dataset::DataSet)::Nothing
     db = store.store
     sql = raw"""
@@ -2209,4 +2337,87 @@ function dataset_to_dataframe(store::DataStore, dataset::DataSet)::DataFrame
     table = get_datasetname(dataset, include_schema=true)
     sql = "SELECT * FROM $LAKE_ALIAS.$(table)"
     return DuckDB.query(store.lake, sql) |> DataFrame
+end
+# Map TRE variable type -> DuckDB SQL type
+"""
+    tre_type_to_duckdb_sql(value_type_id::Int)::String
+
+Map TRE variable type IDs to DuckDB SQL data types.
+- 'value_type_id' is the TRE variable type ID. 
+This function returns the corresponding DuckDB SQL data type as a string.
+"""
+function tre_type_to_duckdb_sql(value_type_id::Int)::String
+    if value_type_id == TRE_TYPE_INTEGER
+        return "INTEGER"
+    elseif value_type_id == TRE_TYPE_FLOAT
+        return "DOUBLE"
+    elseif value_type_id == TRE_TYPE_DATE
+        return "DATE"
+    elseif value_type_id == TRE_TYPE_TIME
+        return "TIME"
+    elseif value_type_id == TRE_TYPE_DATETIME
+        return "TIMESTAMP"
+    elseif value_type_id == TRE_TYPE_CATEGORY
+        # Store category values as BIGINT (FK/code) by default; adjust if you store codes instead
+        return "SMALLINT"
+    else
+        return "VARCHAR"
+    end
+end
+
+"""
+    create_duckdb_table_sql(table_name::AbstractString, variables::Vector{Variable})::String
+
+Generate a CREATE TABLE SQL statement for DuckDB based on the provided variables.
+- 'table_name' is the name of the table to create.
+- 'variables' is a vector of Variable objects defining the table schema.
+This function returns a SQL string that can be executed to create the table in DuckDB.
+"""
+function create_duckdb_table_sql(table_name::AbstractString, variables::Vector{Variable})::String
+    cols = String[]
+    for v in variables
+        colname = replace(v.name, "\"" => "\"\"") # minimal escaping
+        push!(cols, "\"$colname\" $(tre_type_to_duckdb_sql(v.value_type_id))")
+    end
+    return "CREATE TABLE \"$table_name\" (\n  $(join(cols, ",\n  "))\n)"
+end
+
+"""
+    load_query(datastore::DataStore, dataset::DataSet, source_conn::DBInterface.Connection, sql::AbstractString)
+
+Load data from a source database connection into a dataset table in the TRE lake.
+- 'datastore' is the DataStore object containing the datastore and datalake connections.
+- 'dataset' is the DataSet object representing the target dataset.
+- 'source_conn' is the DBInterface.Connection object for the source database.
+- 'sql' is the SQL query string to retrieve data from the source database.
+This function creates the target table in the TRE lake based on the dataset's variables
+"""
+function load_query(datastore::DataStore, dataset::DataSet, source_conn::DBInterface.Connection, sql::AbstractString)
+    schema = to_ncname(dataset.version.asset.study.name)
+    DuckDB.query(store.lake, "CREATE SCHEMA IF NOT EXISTS $(schema);")
+    table = get_datasetname(dataset, include_schema=false)
+    DBInterface.execute(datastore.lake, create_duckdb_table_sql(schema * "." * table, dataset.variables))
+    app = DuckDB.Appender(datastore.lake, table, schema)
+    try
+        res = DBInterface.execute(source_conn, sql)
+
+        # Iterate rows without DataFrames
+        for row in Tables.rows(res)
+            # Build a row in the same column order as `variables`
+            vals = Any[]
+            for v in dataset.variables
+                sym = Symbol(v.name)
+                push!(vals, getproperty(row, sym))
+            end
+            for v in vals
+                DuckDB.append(app, v)
+            end
+            DuckDB.end_row(app)
+        end
+        DuckDB.flush(app)
+    finally
+        DuckDB.close(app)
+    end
+
+    return nothing
 end

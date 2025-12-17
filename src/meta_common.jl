@@ -165,7 +165,7 @@ end
 Get the comment/description for a column from the database metadata.
 """
 function get_column_comment(conn, table_name::AbstractString, column_name::AbstractString,
-                           schema_name::Union{AbstractString,Nothing}, ::DatabaseFlavour)::Union{String,Missing}
+    schema_name::Union{AbstractString,Nothing}, ::DatabaseFlavour)::Union{String,Missing}
     # Default: no comment support
     return missing
 end
@@ -182,7 +182,7 @@ or `nothing` if no foreign key relationship can be determined.
 Database-specific overrides implement this for each flavour.
 """
 function get_foreign_key_reference(conn, table_name::AbstractString, column_name::AbstractString,
-                                   ::DatabaseFlavour)::Union{Nothing,Tuple{String,String}}
+    ::DatabaseFlavour)::Union{Nothing,Tuple{String,String}}
     return nothing
 end
 #endregion
@@ -237,7 +237,7 @@ Extract vocabulary items from a code/lookup table.
 Uses the primary key as value, first string column as code, and description column if present.
 """
 function get_code_table_vocabulary(conn, table_name::AbstractString, pk_column::AbstractString,
-                                   flavour::DatabaseFlavour)::Vector{VocabularyItem}
+    flavour::DatabaseFlavour)::Vector{VocabularyItem}
     items = VocabularyItem[]
 
     # Get table columns to find first string column and description column
@@ -355,7 +355,7 @@ end
 Extract allowed values from CHECK constraints on a column.
 """
 function get_check_constraint_values(conn, table_name::AbstractString, column_name::AbstractString,
-                                     ::DatabaseFlavour)::Vector{VocabularyItem}
+    ::DatabaseFlavour)::Vector{VocabularyItem}
     return VocabularyItem[]
 end
 
@@ -444,7 +444,7 @@ end
 Get the original column type from the database schema.
 """
 function get_original_column_type(conn, table_name::AbstractString, column_name::AbstractString,
-                                  ::DatabaseFlavour)::Union{String,Nothing}
+    ::DatabaseFlavour)::Union{String,Nothing}
     return nothing
 end
 #endregion
@@ -608,7 +608,28 @@ function extract_table_from_sql(sql::AbstractString)::Union{String,Nothing}
 end
 #endregion
 #region sql to dataset
-function sql_to_dataset(store::DataStore, study::Study, dataset_name::String, conn::DBInterface.Connection, sql::String; description::Union{String,Missing}=missing, replace::Bool=false)::DataSet
+"""
+    sql_to_dataset(store::DataStore, study::Study, domain::Domain, dataset_name::String, conn::DBInterface.Connection, db_flavour::AbstractString, sql::String;
+    description::String, replace::Bool=false, new_version::Union{VersionNumber,Nothing}=nothing)::DataSet
+
+Transform the result of an SQL query into a DataSet stored in the TRE DataStore.
+# Arguments
+- `store`: DataStore object
+- `study`: Study object to associate the dataset with
+- `domain`: Domain object for the dataset
+- `dataset_name`: Name of the dataset to create
+- `conn`: Database connection to execute the SQL query
+- `db_flavour`: Database flavour type for metadata extraction
+- `sql`: SQL query string to execute
+- `description`: Description for the dataset asset/version
+- `replace`: If true, replace existing dataset with the same name by creating a new version
+- `new_version`: Optional Version object for the new dataset version
+# Returns
+The created DataSet object, or `nothing` on failure.
+"""
+function sql_to_dataset(store::DataStore, study::Study, domain::Domain, dataset_name::String, conn::DBInterface.Connection, db_flavour::AbstractString, sql::String;
+    description::String, replace::Bool=false, new_version::Union{VersionNumber,Nothing}=nothing)::DataSet
+    @info "Saving sql query to datastore"
     if isnothing(store)
         throw(ArgumentError("DataStore cannot be nothing"))
     end
@@ -623,20 +644,30 @@ function sql_to_dataset(store::DataStore, study::Study, dataset_name::String, co
         throw(ArgumentError("Dataset asset with name $dataset_name already exists in study $(study.name). Use `replace=true` to replace it with a new version."))
     end
     try
+        dataset_meta = sql_meta(conn, sql, domain.domain_id, db_flavour)  # domain_id=0 for now
+        @info "Extracted $(length(dataset_meta)) variables from SQL query"
         transaction_begin(store)
-        # Create a temporary table to hold the SQL query results
-        temp_table = "__DF"
-        DBInterface.execute(conn, "DROP TABLE IF EXISTS $temp_table;")
-        DBInterface.execute(conn, "CREATE TABLE $temp_table AS $sql;")
-        # Load the data from the temporary table into the dataset
-        load_table_to_dataset!(store, conn, temp_table, dataset; convert=true)
-        # Drop the temporary table
-        DBInterface.execute(conn, "DROP TABLE IF EXISTS $temp_table;")
+        if isnothing(existing_asset)
+            # Create a new dataset asset & assetversion
+            existing_asset = create_asset(store, study, dataset_name, "dataset", description)
+        else
+            # Create a new version of the existing dataset asset
+            save_asset_version!(store, existing_asset, description, new_version)
+        end
+        dataset = DataSet(version=get_latest_version(existing_asset))
+        register_dataset(store, dataset)
+        @info "Registered dataset with version: $(dataset.version), name: $(dataset.version.asset.name)"
+        dataset.variables = dataset_meta
+        save_variables!(store, dataset)
+        @info "Saved $(length(dataset.variables)) variables to dataset version $(dataset.version.version)"
+        # Execute the SQL and save data in the this dataset in the datasore (using the ducklake)
+        load_query(store, dataset, conn, sql)
+        @info "Loaded data into dataset $(dataset.version.asset.name) version $(dataset.version.version)"
         #Create a transformation to record this ingestion
         commit = git_commit_info(; script_path=caller_file_runtime(1))
         transformation = Transformation(
-            transformation_type="transform",
-            description="Transformed SQL query to dataset $(dataset_name)",
+            transformation_type="ingest",
+            description="Ingested sql \n$sql\n to dataset $(dataset.version.asset.name) version $(dataset.version.version)",
             repository_url=commit.repo_url,
             commit_hash=commit.commit,
             file_path=commit.script_relpath

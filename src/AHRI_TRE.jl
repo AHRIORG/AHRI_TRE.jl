@@ -26,7 +26,7 @@ using Git
 using ODBC
 
 export
-    DataStore, Vocabulary, VocabularyItem, AbstractStudy, Study, Domain, Entity, EntityRelation,
+    DataStore, Version, Vocabulary, VocabularyItem, AbstractStudy, Study, Domain, Entity, EntityRelation,
     AbstractAsset, Asset, AbstractAssetVersion, AssetVersion, DataFile, Transformation,
     createdatastore, opendatastore, closedatastore,
     upsert_study!, upsert_domain!, get_domain, get_study, list_studies, add_study_domain!, create_study!,
@@ -859,11 +859,11 @@ function ingest_file(store::DataStore, study::Study, asset_name::String, file_pa
     if !isnothing(existing_asset) && !new_version
         throw(ArgumentError("Asset with name $asset_name already exists in study $(study.name). Use `new_version=true` to add a new version."))
     end
-    # if there is an existing asset get the latest version
     base_name, ext = splitext(basename(file_path))
     base_name = to_ncname(asset_name, strict=true) # use the asset name instead of the original filename
     version = to_ncname(string(VersionNumber(1, 0, 0)), strict=true)
     latest_version = nothing
+    # if there is an existing asset get the latest version
     if !isnothing(existing_asset)
         latest_version = get_latest_version(existing_asset)
         if isnothing(latest_version)
