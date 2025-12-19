@@ -16,4 +16,5 @@ datastore = AHRI_TRE.DataStore(
 );
 datastore = AHRI_TRE.opendatastore(datastore)
 cohorts = AHRI_TRE.read_dataset(datastore,"APCC","redcap_1194")
+cause = AHRI_TRE.read_dataset(datastore,"Test","cause_counts_mssql_nehiqzia")
 closedatastore(datastore)

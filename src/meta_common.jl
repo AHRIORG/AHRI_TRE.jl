@@ -659,15 +659,15 @@ function sql_to_dataset(store::DataStore, study::Study, domain::Domain, dataset_
         @info "Registered dataset with version: $(dataset.version), name: $(dataset.version.asset.name)"
         dataset.variables = dataset_meta
         save_variables!(store, dataset)
-        @info "Saved $(length(dataset.variables)) variables to dataset version $(dataset.version.version)"
+        @info "Saved $(length(dataset.variables)) variables to dataset version $(dataset.version.version_id)"
         # Execute the SQL and save data in the this dataset in the datasore (using the ducklake)
         load_query(store, dataset, conn, sql)
-        @info "Loaded data into dataset $(dataset.version.asset.name) version $(dataset.version.version)"
+        @info "Loaded data into dataset $(dataset.version.asset.name) version $(dataset.version.version_id)"
         #Create a transformation to record this ingestion
         commit = git_commit_info(; script_path=caller_file_runtime(1))
         transformation = Transformation(
             transformation_type="ingest",
-            description="Ingested sql \n$sql\n to dataset $(dataset.version.asset.name) version $(dataset.version.version)",
+            description="Ingested sql \n$sql\n to dataset $(dataset.version.asset.name) version $(dataset.version.version_id)",
             repository_url=commit.repo_url,
             commit_hash=commit.commit,
             file_path=commit.script_relpath

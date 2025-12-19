@@ -1763,7 +1763,7 @@ Save a new version of an existing asset in the TRE datastore.
 This function will create and save a new AssetVersion for the existing asset.
 """
 function save_asset_version!(store::DataStore, existing_asset::Asset, description::String, new_version::Union{VersionNumber,Nothing})
-    if is_nothing(new_version)
+    if isnothing(new_version)
         latest_version = get_latest_version(existing_asset)
         if isnothing(latest_version)
             error("No existing versions found for asset $(existing_asset.name)")
@@ -1778,7 +1778,11 @@ function save_asset_version!(store::DataStore, existing_asset::Asset, descriptio
         note=description,
         is_latest=true
     )
-    push!(existing_asset.versions, save_version!(store, asset_version))
+    for version in existing_asset.versions
+        version.is_latest = false
+    end
+    saved_version = save_version!(store, asset_version)
+    push!(existing_asset.versions, saved_version)
     return nothing
 end
 """
@@ -2379,7 +2383,14 @@ function create_duckdb_table_sql(table_name::AbstractString, variables::Vector{V
         colname = replace(v.name, "\"" => "\"\"") # minimal escaping
         push!(cols, "\"$colname\" $(tre_type_to_duckdb_sql(v.value_type_id))")
     end
-    return "CREATE TABLE \"$table_name\" (\n  $(join(cols, ",\n  "))\n)"
+    ident = quote_qualified_identifier(table_name)
+    return "CREATE TABLE $(ident) (\n  $(join(cols, ",\n  "))\n)"
+end
+
+function quote_qualified_identifier(name::AbstractString)::String
+    parts = split(name, '.')
+    quoted_parts = ["\"" * replace(part, "\"" => "\"\"") * "\"" for part in parts]
+    return join(quoted_parts, ".")
 end
 
 """
@@ -2394,7 +2405,7 @@ This function creates the target table in the TRE lake based on the dataset's va
 """
 function load_query(datastore::DataStore, dataset::DataSet, source_conn::DBInterface.Connection, sql::AbstractString)
     schema = to_ncname(dataset.version.asset.study.name)
-    DuckDB.query(store.lake, "CREATE SCHEMA IF NOT EXISTS $(schema);")
+    DuckDB.query(datastore.lake, "CREATE SCHEMA IF NOT EXISTS $(schema);")
     table = get_datasetname(dataset, include_schema=false)
     DBInterface.execute(datastore.lake, create_duckdb_table_sql(schema * "." * table, dataset.variables))
     app = DuckDB.Appender(datastore.lake, table, schema)
