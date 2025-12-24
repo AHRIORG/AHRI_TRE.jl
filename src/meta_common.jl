@@ -319,6 +319,28 @@ function get_code_table_vocabulary(conn, table_name::AbstractString, pk_column::
     return items
 end
 
+function build_code_table_vocabulary_for_column(conn, column_name::AbstractString, ref_table::AbstractString,
+    ref_column::AbstractString, flavour::DatabaseFlavour)::Union{Vocabulary,Nothing}
+    if !is_code_table(conn, ref_table, ref_column, flavour)
+        return nothing
+    end
+    code_items = get_code_table_vocabulary(conn, ref_table, ref_column, flavour)
+    if isempty(code_items)
+        return nothing
+    end
+    return Vocabulary(
+        vocabulary_id=nothing,
+        name="$(column_name)_codes",
+        description="Code table values from $ref_table",
+        items=code_items
+    )
+end
+
+function find_code_table_by_column_name(conn, column_name::AbstractString,
+    ::DatabaseFlavour, source_table::Union{Nothing,String})::Union{Nothing,Tuple{String,String}}
+    return nothing
+end
+
 """
     get_table_columns(conn, table_name::AbstractString, flavour::DatabaseFlavour) -> Vector{ColumnInfo}
 
@@ -532,17 +554,22 @@ function sql_meta(conn, sql::AbstractString, domain_id::Int, flavour::DatabaseFl
             fk_ref = get_foreign_key_reference(conn, col_table, column_name, flavour)
             if !isnothing(fk_ref)
                 ref_table, ref_column = fk_ref
-                if is_code_table(conn, ref_table, ref_column, flavour)
+                code_vocab = build_code_table_vocabulary_for_column(conn, column_name, ref_table, ref_column, flavour)
+                if !isnothing(code_vocab)
                     value_type_id = TRE_TYPE_CATEGORY
-                    code_items = get_code_table_vocabulary(conn, ref_table, ref_column, flavour)
-                    if !isempty(code_items)
-                        vocabulary = Vocabulary(
-                            vocabulary_id=nothing,
-                            name="$(column_name)_codes",
-                            description="Code table values from $ref_table",
-                            items=code_items
-                        )
-                    end
+                    vocabulary = code_vocab
+                end
+            end
+        end
+
+        if value_type_id == TRE_TYPE_INTEGER && vocabulary === missing
+            direct_ref = find_code_table_by_column_name(conn, column_name, flavour, col_table)
+            if !isnothing(direct_ref)
+                ref_table, ref_column = direct_ref
+                code_vocab = build_code_table_vocabulary_for_column(conn, column_name, ref_table, ref_column, flavour)
+                if !isnothing(code_vocab)
+                    value_type_id = TRE_TYPE_CATEGORY
+                    vocabulary = code_vocab
                 end
             end
         end

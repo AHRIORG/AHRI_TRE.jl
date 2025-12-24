@@ -9,12 +9,21 @@ CREATE TABLE causes (
 COMMENT ON COLUMN causes.code IS 'Unique code for each cause';
 ALTER TABLE causes ADD CONSTRAINT PK_causes PRIMARY KEY (code);
 
+CREATE TABLE cause_categories (
+  cause_category integer NOT NULL,
+  label varchar(255) NOT NULL
+);
+
+COMMENT ON COLUMN cause_categories.cause_category IS 'High-level cause grouping without FK constraint';
+ALTER TABLE cause_categories ADD CONSTRAINT PK_cause_categories PRIMARY KEY (cause_category);
+
 -- tre.deaths definition
 
 CREATE TABLE deaths (
   death_id serial NOT NULL,
   site_id integer NOT NULL,
-  cause integer DEFAULT NULL
+  cause integer DEFAULT NULL,
+  cause_category integer DEFAULT NULL
 );
 
 COMMENT ON COLUMN deaths.cause IS 'The cause of the death';
@@ -57,6 +66,10 @@ INSERT INTO causes (code, label, description) VALUES
   (1, 'Natural', 'Died from natural causes'),
   (2, 'Unnatural', 'Did not die from natural causes');
 
+INSERT INTO cause_categories (cause_category, label) VALUES
+  (1, 'Medical'),
+  (2, 'External');
+
 INSERT INTO sources (name) VALUES
   ('Alpha'),
   ('Beta');
@@ -65,23 +78,23 @@ INSERT INTO sites (site_id, source_id) VALUES
   (10, 1),
   (20, 2);
 
-INSERT INTO deaths (site_id, cause) VALUES
-  (10, 1),
-  (10, 1),
-  (10, 1),
-  (10, 1),
-  (10, 2),
-  (10, 2),
-  (10, 1),
-  (10, 2),
-  (10, 1),
-  (20, 1),
-  (20, 1),
-  (20, 1),
-  (20, 1),
-  (20, 1),
-  (20, 2),
-  (20, 1),
-  (20, 1),
-  (20, 1),
-  (20, 1);
+INSERT INTO deaths (site_id, cause, cause_category) VALUES
+  (10, 1, 1),
+  (10, 1, 1),
+  (10, 1, 1),
+  (10, 1, 1),
+  (10, 2, 2),
+  (10, 2, 2),
+  (10, 1, 1),
+  (10, 2, 2),
+  (10, 1, 1),
+  (20, 1, 1),
+  (20, 1, 1),
+  (20, 1, 1),
+  (20, 1, 1),
+  (20, 1, 1),
+  (20, 2, 2),
+  (20, 1, 1),
+  (20, 1, 1),
+  (20, 1, 1),
+  (20, 1, 1);

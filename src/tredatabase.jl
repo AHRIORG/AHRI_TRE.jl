@@ -1035,13 +1035,15 @@ function get_study(store::DataStore, id::UUID)::Union{Study,Nothing}
         return nothing
     end
     row = df[1, :]
-    return Study(
+    study = Study(
         study_id=UUID(row.study_id),
         name=row.name,
         description=coalesce(row.description, missing),
         external_id=row.external_id,
         study_type_id=row.study_type_id
     )
+    study.domains = get_study_domains(store, study)
+    return study
 end
 """
     get_study(store::DataStore, name::AbstractString)::Union{Study,Nothing}
@@ -1067,13 +1069,15 @@ function get_study(store::DataStore, name::AbstractString)::Union{Study,Nothing}
         return nothing
     end
     row = df[1, :]
-    return Study(
+    study = Study(
         study_id=UUID(row.study_id),
         name=row.name,
         description=coalesce(row.description, missing),
         external_id=row.external_id,
         study_type_id=row.study_type_id
     )
+    study.domains = get_study_domains(store, study)
+    return study
 end
 """
     list_studies(store::DataStore)::Vector{Study}
@@ -1227,6 +1231,28 @@ function add_study_domain!(store::DataStore, study::Study, domain::Domain)
         push!(study.domains, domain)
     end
     return nothing
+end
+function get_study_domains(store::DataStore, study::Study)::Vector{Domain}
+    db = store.store
+    sql = raw"""
+        SELECT d.domain_id, d.name, d.uri, d.description
+          FROM domains d
+          JOIN study_domains sd ON d.domain_id = sd.domain_id
+         WHERE sd.study_id = $1
+         ORDER BY d.name;
+    """
+    stmt = DBInterface.prepare(db, sql)
+    df = DBInterface.execute(stmt, (study.study_id,)) |> DataFrame
+    domains = Domain[]
+    for row in eachrow(df)
+        push!(domains, Domain(
+            domain_id=row.domain_id,
+            name=row.name,
+            uri=coalesce(row.uri, missing),
+            description=coalesce(row.description, missing)
+        ))
+    end
+    return domains
 end
 """
     upsert_entity!(store::DataStore, entity::Entity)::Entity
