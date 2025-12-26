@@ -190,6 +190,11 @@ end
     prepareselectstatement(conn::DBInterface.Connection, table, columns::Vector{String}, filter::Vector{String})
 
 Return a statement to select columns from a table, with 0 to n columns to filter on
+- `conn`: The database connection
+- `table`: The name of the table to query
+- `columns`: A vector of column names to select
+- `filter`: A vector of column names to filter on
+- returns: A prepared statement object
 """
 function prepareselectstatement(conn::DBInterface.Connection, table, columns::Vector{String}, filter::Vector{String})
     # Start with the SELECT clause
@@ -207,6 +212,12 @@ end
     selectdataframe(conn::DBInterface.Connection, table::String, columns::Vector{String}, filter::Vector{String}, filtervalues::DBInterface.StatementParams)::AbstractDataFrame
 
 Return a dataframe from a table, with 0 to n columns to filter on
+- `conn`: The database connection
+- `table`: The name of the table to query
+- `columns`: A vector of column names to select
+- `filter`: A vector of column names to filter on
+- `filtervalues`: A vector of values corresponding to the filter columns
+- returns: A DataFrame containing the query results
 """
 function selectdataframe(conn::DBInterface.Connection, table::String, columns::Vector{String}, filter::Vector{String}, filtervalues::DBInterface.StatementParams)::AbstractDataFrame
     stmt = prepareselectstatement(conn, table, columns, filter)
@@ -1104,23 +1115,18 @@ function list_studies(store::DataStore)::Vector{Study}
     ) for row in eachrow(df)]
 end
 """
-    upsert_domain!(store::DataStore, domain::Domain)::Domain
+    add_domain!(store::DataStore, domain::Domain)::Domain
 
-Create or update a domain record. If a domain with the same (name, uri) already
-exists (treating NULL uri correctly), it updates and returns its domain_id.
-Otherwise, it inserts a new row and returns the new domain_id.
+Add a new domain record. If a domain with the same (name, uri) already exists
+(treating NULL uri correctly), it raises an error.
 - 'domain' is a Domain object containing the name, uri, and description.
 - 'store' is the DataStore object containing the database connection.
 If the domain has a non-NULL URI, it must be unique with respect to the name and URI combination.
 If the domain has a NULL URI, it must be unique with respect to the name only, allowing at most one row with a NULL URI for each name.
-This function returns the updated or newly created Domain object with the domain_id set.
+This function returns the newly created Domain object with the domain_id set.
 """
-function upsert_domain!(store::DataStore, domain::Domain)::Domain
-    if isnothing(store)
-        throw(ArgumentError("DataStore cannot be nothing"))
-    end
+function add_domain!(store::DataStore, domain::Domain)::Domain
     db = store.store
-
     # 1) Does a matching domain already exist?
     sql_get = raw"""
         SELECT domain_id
@@ -1132,30 +1138,46 @@ function upsert_domain!(store::DataStore, domain::Domain)::Domain
     stmt_get = DBInterface.prepare(db, sql_get)
     df = DBInterface.execute(stmt_get, (domain.name, domain.uri)) |> DataFrame
 
-    if nrow(df) == 0
-        @info "Insert new domain: $(domain.name) with URI '$(domain.uri)'"
-        sql_ins = raw"""
-            INSERT INTO domains (name, uri, description)
-            VALUES ($1, $2, $3)
-            RETURNING domain_id;
-        """
-        stmt_ins = DBInterface.prepare(db, sql_ins)
-        ins = DBInterface.execute(stmt_ins, (domain.name, domain.uri, domain.description)) |> DataFrame
-        domain.domain_id = ins[1, :domain_id]
-    else
-        @info "Update existing domain: $(domain.name) with URI '$(domain.uri)'"
-        domain.domain_id = df[1, :domain_id]
-        sql_upd = raw"""
-            UPDATE domains
-               SET description = $1
-             WHERE domain_id   = $2
-             RETURNING domain_id;
-        """
-        stmt_upd = DBInterface.prepare(db, sql_upd)
-        DBInterface.execute(stmt_upd, (domain.description, domain.domain_id))
+    if nrow(df) > 0
+        error("Domain with name '$(domain.name)' and URI '$(domain.uri)' already exists with domain_id=$(df[1, :domain_id])")
     end
+    sql_ins = raw"""
+        INSERT INTO domains (name, uri, description)
+        VALUES ($1, $2, $3)
+        RETURNING domain_id;
+    """
+    stmt_ins = DBInterface.prepare(db, sql_ins)
+    ins = DBInterface.execute(stmt_ins, (domain.name, domain.uri, domain.description)) |> DataFrame
+    domain.domain_id = ins[1, :domain_id]
 
     return domain
+end
+"""
+    update_domain(store::DataStore, domain::Domain)::Nothing
+
+Update an existing domain record.
+- 'store' is the DataStore object containing the database connection.
+- 'domain' is a Domain object containing the domain_id, name, uri, and description
+- returns nothing.
+This function updates the domain record identified by domain.domain_id with the new values for description and uri.
+It raises an error if domain.domain_id is nothing.
+
+"""
+function update_domain(store::DataStore, domain::Domain)::Nothing
+    db = store.store
+    if isnothing(domain.domain_id)
+        error("Domain must have a domain_id to be updated")
+    end
+    sql_upd = raw"""
+        UPDATE domains
+           SET description = $1,
+               uri         = $2
+         WHERE domain_id   = $3;
+    """
+    stmt_upd = DBInterface.prepare(db, sql_upd)
+    DBInterface.execute(stmt_upd, (domain.description, domain.uri, domain.domain_id))
+
+    return nothing
 end
 
 """
@@ -1452,7 +1474,7 @@ function list_domainrelations(store::DataStore, domain_id::Int)::DataFrame
     return df
 end
 """
-    list_assets_df(store::DataStore, study::Study; include_versions=true)::DataFrame
+    list_study_assets_df(store::DataStore, study::Study; include_versions=true)::DataFrame
 
 Return a DataFrame containing all assets in the specified study.
 - 'store' is the DataStore object containing the database connection.
@@ -1460,7 +1482,7 @@ Return a DataFrame containing all assets in the specified study.
 - 'include_versions' is a boolean flag indicating whether to include asset versions in the DataFrame.
 If `include_versions` is true, the DataFrame will include asset version details
 """
-function list_assets_df(store::DataStore, study::Study; include_versions=true)::DataFrame
+function list_study_assets_df(store::DataStore, study::Study; include_versions=true)::DataFrame
     sql = ""
     if include_versions
         sql = raw"""
@@ -1489,15 +1511,15 @@ function list_assets_df(store::DataStore, study::Study; include_versions=true)::
     return DBInterface.execute(DBInterface.prepare(store.store, sql), (study.study_id,)) |> DataFrame
 end
 """
-    list_assets(store::DataStore, study::Study; include_versions=true)::Vector{Asset}
+    list_study_assets(store::DataStore, study::Study; include_versions=true)::Vector{Asset}
 Return a DataFrame containing all assets in the specified study.
 - 'store' is the DataStore object containing the database connection.
 - 'study' is the Study object to list assets from.
 - 'include_versions' is a boolean flag indicating whether to include asset versions in the returned Asset objects.
 The DataFrame will contain all columns from the assets table, ordered by name.
 """
-function list_assets(store::DataStore, study::Study; include_versions=true)::Vector{Asset}
-    df = list_assets_df(store, study, include_versions=false)
+function list_study_assets(store::DataStore, study::Study; include_versions=true)::Vector{Asset}
+    df = list_study_assets_df(store, study, include_versions=false)
     if nrow(df) == 0
         return Asset[]
     end
@@ -1728,6 +1750,14 @@ function create_asset(store::DataStore, study::Study, name::String, type::String
     push!(asset.versions, version) # Add the version to the asset's versions
     return asset
 end
+"""
+    save_version!(store::DataStore, version::AssetVersion)::AssetVersion
+
+Save an AssetVersion object to the TRE datastore.
+- `store`: The DataStore object containing connection details for the datastore.
+- `version`: The AssetVersion object to save.
+If the version is marked as latest, it will unset the is_latest flag on all other versions
+"""
 function save_version!(store::DataStore, version::AssetVersion)::AssetVersion
     db = store.store
     if version.is_latest
@@ -1895,14 +1925,44 @@ function get_datafile_meta(store::DataStore, assetversion::AssetVersion)::Union{
     )
 end
 """
-    save_transformation!(store::DataStore, transformation::Transformation)::Transformation
+    create_transformation(transformation_type::String, description::String;
+        repository_url::Union{Missing,String}=missing,
+        commit_hash::Union{Missing,String}=missing,
+        file_path::Union{Missing,String}=missing)::Transformation
+
+Create a Transformation object.
+- `transformation_type`: The type of transformation, must be one of "ingest", "transform", "entity", or "export".
+- `description`: A description of the transformation.
+- `repository_url`: An optional URL of the repository containing the transformation code (default is missing
+- `commit_hash`: An optional commit hash of the transformation code (default is missing).
+- `file_path`: An optional file path within the repository for the transformation code (default is missing).
+This function returns a Transformation object with the specified properties.
+"""
+function create_transformation(transformation_type::String, description::String;
+    repository_url::Union{Missing,String}=missing,
+    commit_hash::Union{Missing,String}=missing,
+    file_path::Union{Missing,String}=missing)::Transformation
+    if transformation_type ∉ ["ingest", "transform", "entity", "export"]
+        error("Invalid transformation_type: $transformation_type. Must be one of 'ingest', 'transform', 'entity', 'export'")
+    end
+    return Transformation(
+        transformation_id=nothing,
+        transformation_type=transformation_type,
+        description=description,
+        repository_url=repository_url,
+        commit_hash=commit_hash,
+        file_path=file_path
+    )
+end
+"""
+    add_transformation!(store::DataStore, transformation::Transformation)::Transformation
 
 Save a transformation in the TRE datastore.
 - `store`: The DataStore object containing connection details for the datastore.
 - `transformation`: The Transformation object to save
 This function will insert the transformation into the database and return the updated Transformation object with its transformation_id set.
 """
-function save_transformation!(store::DataStore, transformation::Transformation)::Transformation
+function add_transformation!(store::DataStore, transformation::Transformation)::Transformation
     db = store.store
     @info "Inserting new transformation: $(transformation.description)"
     if !isnothing(transformation.transformation_id)
@@ -2031,14 +2091,79 @@ function list_study_transformations(store::DataStore, study::Study)::DataFrame
     return DBInterface.execute(stmt, (study.study_id,)) |> DataFrame
 end
 """
-    get_eav_variables(store::DataStore, datafile::DataFile)::Vector{Variable}
+    get_eav_variable_names(store::DataStore, datafile::DataFile)::DataFrame
 
-Return a vector of Variable objects representing the EAV variables in the specified DataFile.
+Return a DataFrame containing all distinct EAV variable names from the specified datafile.
 - 'store' is the DataStore object containing the database connection.
 - 'datafile' is the DataFile object for which to retrieve EAV variables.
 
 """
-function get_eav_variables(store::DataStore, datafile::DataFile)::DataFrame
+
+"""
+    upsert_variable!(db, domain_id::Int, name::String; value_type_id::Int, vocabulary_id::Union{Nothing,Int}=nothing, description::Union{Missing,String}=missing) -> Int
+
+Upserts into variables on (domain_id, name). Returns variable_id.
+- 'datastore' is the DataStore object containing the database connection.
+- 'domain_id' is the ID of the domain to which the variable belongs.
+- 'name' is the name of the variable.
+- 'value_type_id' is the ID of the value type for the variable.
+- 'value_format' is an optional format string for the variable's value type (default is missing).
+- 'vocabulary_id' is an optional ID of the vocabulary associated with the variable (default is missing).
+- 'description' is an optional description of the variable (default is missing).
+- 'note' is an optional note for the variable (default is missing).
+- 'keyrole' is an optional key role for the variable (default is "none").
+- 'ontology_namespace' is an optional ontology namespace for the variable (default is missing).
+- 'ontology_class' is an optional ontology class for the variable (default is missing).
+Returns the variable_id of the inserted or updated variable.
+"""
+function upsert_variable!(datastore::DataStore, domain_id::Int, name::String; value_type_id::Int, value_format::Union{Missing,String}=missing,
+    vocabulary_id::Union{Int,Missing}=missing, description=missing, note=missing, keyrole::String="none", ontology_namespace::Union{Missing,String}=missing,
+    ontology_class::Union{Missing,String}=missing)::Int
+    db = datastore.store
+    stmt = DBInterface.prepare(
+        db,
+        raw"""
+            INSERT INTO variables (domain_id, name, value_type_id, value_format, vocabulary_id, description, note, keyrole, ontology_namespace, ontology_class)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+            ON CONFLICT (domain_id, name) DO UPDATE
+            SET value_type_id = EXCLUDED.value_type_id,
+                value_format  = EXCLUDED.value_format,
+                vocabulary_id = EXCLUDED.vocabulary_id,
+                description   = EXCLUDED.description,
+                note          = EXCLUDED.note,
+                keyrole       = EXCLUDED.keyrole,
+                ontology_namespace = EXCLUDED.ontology_namespace,
+                ontology_class     = EXCLUDED.ontology_class
+            RETURNING variable_id;
+        """
+    )
+    df = DBInterface.execute(stmt, (domain_id, name, value_type_id, value_format, vocabulary_id, description, note, keyrole, ontology_namespace, ontology_class)) |> DataFrame
+    return df[1, :variable_id]
+end
+function add_variable!(datastore::DataStore, variable::Variable)::Variable
+    variable.variable_id = upsert_variable!(datastore, variable.domain_id, variable.name;
+        value_type_id=variable.value_type_id,
+        value_format=variable.value_format,
+        vocabulary_id=variable.vocabulary_id,
+        description=variable.description,
+        note=variable.note,
+        keyrole=variable.keyrole,
+        ontology_namespace=variable.ontology_namespace,
+        ontology_class=variable.ontology_class)
+    if !ismissing(variable.vocabulary)
+        variable.vocabulary_id = ensure_vocabulary!(datastore, variable.vocabulary)
+    end
+    return variable
+end
+"""
+    get_eav_variable_names(store::DataStore, datafile::DataFile)::DataFrame
+
+Return a DataFrame containing all distinct EAV variable names from the specified datafile.
+- 'store' is the DataStore object containing the database connection.
+- 'datafile' is the DataFile object for which to retrieve EAV variables.
+The DataFrame will contain a single column 'field_name' with distinct variable names ordered alphabetically.
+"""
+function get_eav_variable_names(store::DataStore, datafile::DataFile)::DataFrame
     db = store.lake
     sql = """
     SELECT DISTINCT field_name 
@@ -2048,18 +2173,21 @@ function get_eav_variables(store::DataStore, datafile::DataFile)::DataFrame
     stmt = DBInterface.prepare(db, sql)
     return DBInterface.execute(stmt) |> DataFrame
 end
-function get_study_variables(store::DataStore, study::Study)::DataFrame
+"""
+    get_study_variables(store::DataStore, study::Study)::DataFrame
+
+Return a DataFrame containing all variables associated with the specified study.
+- 'store' is the DataStore object containing the database connection.
+- 'study' is the Study object to list variables from.
+- 'domain' is an optional Domain object to filter variables by domain.
+If `domain` is provided, only variables from that domain are returned.
+"""
+function get_study_variables(store::DataStore, study::Study, domain::Union{Domain,Nothing}=nothing)::DataFrame
     db = store.store
-    sql = raw"""
-        SELECT
-          v.*
-        FROM public.variables v
-        JOIN public.domains d ON v.domain_id = d.domain_id
-        JOIN public.study_domains s ON s.domain_id = d.domain_id
-        WHERE s.study_id = $1;
-    """
-    stmt = DBInterface.prepare(db, sql)
-    return DBInterface.execute(stmt, (study.study_id,)) |> DataFrame
+    if !isnothing(domain)
+        return selectdataframe(db, "variables", ["*"], ["study_id"], [study.study_id])
+    end
+    return selectdataframe(db, "variables", ["*"], ["study_id", "domain_id"], [study.study_id, domain.domain_id])
 end
 """
     get_vocabulary(store::DataStore, vocabulary_id::Int)::Union{Vocabulary,Nothing}
@@ -2107,7 +2235,112 @@ function get_vocabulary(store::DataStore, vocabulary_id::Int)::Union{Vocabulary,
     end
     return vocabulary
 end
+"""
+    list_study_variables(store::DataStore, study::Study, domain::Union{Domain,Nothing}=nothing)::Vector{Variable}
 
+Return a vector of Variable objects associated with the specified study.
+- 'store' is the DataStore object containing the database connection.
+- 'study' is the Study object to list variables from.
+- 'domain' is an optional Domain object to filter variables by domain.
+If `domain` is provided, only variables from that domain are returned.
+"""
+function list_study_variables(store::DataStore, study::Study, domain::Union{Domain,Nothing}=nothing)::Vector{Variable}
+    db = store.store
+    df = get_study_variables(store, study, domain)
+    variables = Vector{Variable}()
+    for row in eachrow(df)
+        var = Variable(
+            variable_id=row.variable_id,
+            domain_id=row.domain_id,
+            name=row.name,
+            value_type_id=row.value_type_id,
+            value_format=coalesce(row.value_format, missing),
+            vocabulary_id=coalesce(row.vocabulary_id, missing),
+            description=coalesce(row.description, missing),
+            note=coalesce(row.note, missing),
+            keyrole=row.keyrole,
+            ontology_namespace=coalesce(row.ontology_namespace, missing),
+            ontology_class=coalesce(row.ontology_class, missing)
+        )
+        if !ismissing(var.vocabulary_id)
+            vocab = get_vocabulary(store, var.vocabulary_id)
+            var.vocabulary = vocab
+        end
+        push!(variables, var)
+    end
+    return variables
+end
+function list_domain_variables(store, domain::Domain)::Vector{Variable}
+    db = store.store
+    df = selectdataframe(db, "variables", ["*"], ["domain_id"], [domain.domain_id])
+    variables = Vector{Variable}()
+    for row in eachrow(df)
+        var = Variable(
+            variable_id=row.variable_id,
+            domain_id=row.domain_id,
+            name=row.name,
+            value_type_id=row.value_type_id,
+            value_format=coalesce(row.value_format, missing),
+            vocabulary_id=coalesce(row.vocabulary_id, missing),
+            description=coalesce(row.description, missing),
+            note=coalesce(row.note, missing),
+            keyrole=row.keyrole,
+            ontology_namespace=coalesce(row.ontology_namespace, missing),
+            ontology_class=coalesce(row.ontology_class, missing)
+        )
+        if !ismissing(var.vocabulary_id)
+            vocab = get_vocabulary(store, var.vocabulary_id)
+            var.vocabulary = vocab
+        end
+        push!(variables, var)
+    end
+    return variables
+end
+"""
+    ensure_vocabulary!(db, vocab_name::String, description::String,
+                       items::Vector{NamedTuple{(:value,:code,:description),Tuple{Int,String,Union{String,Missing}}}}) -> Int
+
+Creates or reuses a vocabulary by name, and (re)loads items idempotently.
+Returns vocabulary_id.
+"""
+function ensure_vocabulary!(store::DataStore, vocab_name::String, description::String, items::Vector{AbstractVocabularyItem})::Int
+    # 1) Get or create vocabulary
+    db = store.store
+    q_get = DBInterface.prepare(
+        db,
+        raw"""
+            SELECT vocabulary_id FROM vocabularies WHERE name = $1 LIMIT 1;
+        """
+    )
+    df = DBInterface.execute(q_get, (vocab_name,)) |> DataFrame
+    # Initialize to sentinel; we'll always assign in one of the branches
+    vocab_id = -1
+    if nrow(df) == 0
+        vocab_id = insertwithidentity(db, "vocabularies",
+            ["name", "description"], (vocab_name, description))
+    else
+        vocab_id = df[1, :vocabulary_id]
+        # Keep description up to date
+        DBInterface.execute(db, raw"""UPDATE vocabularies SET description = $2 WHERE vocabulary_id = $1;""",
+            (vocab_id, description))
+    end
+
+    # 2) Load items idempotently: delete & reinsert for simplicity (fast + clean)
+    DBInterface.execute(db, raw"""DELETE FROM vocabulary_items WHERE vocabulary_id = $1;""", (vocab_id,))
+    ins = DBInterface.prepare(
+        db,
+        raw"""
+            INSERT INTO vocabulary_items (vocabulary_id, value, code, description)
+            VALUES ($1,$2,$3,$4);
+        """
+    )
+    for it in items
+        it.vocabulary_item_id = insertwithidentity(db, "vocabulary_items",
+            ["vocabulary_id", "value", "code", "description"], (vocab_id, it.value, it.code, it.description))
+        it.vocabulary_id = vocab_id
+    end
+    return vocab_id
+end
 """
     ensure_vocabulary!(db, vocab::Vocabulary) -> Int
 
@@ -2116,14 +2349,13 @@ Ensure that `vocab` exists in the datastore `vocabularies` table and (re)load it
 
 Returns the `vocabulary_id`.
 """
-function ensure_vocabulary!(db, vocab::Vocabulary)::Int
-    # Delegate to the string-based helper (defined in redcap.jl) to keep behaviour consistent.
+function ensure_vocabulary!(store::DataStore, vocab::Vocabulary)::Int
     desc = coalesce(vocab.description, "")
-    return ensure_vocabulary!(db, vocab.name, desc, vocab.items)
+    vocab.vocabulary_id = ensure_vocabulary!(store, vocab.name, desc, vocab.items)
 end
 
 """
-    save_variables!(store::DataStore, dataset::DataSet)::Nothing
+    save_dataset_variables!(store::DataStore, dataset::DataSet)::Nothing
 
 Persist the variable metadata attached to `dataset.variables` into the datastore metadata tables:
 
@@ -2134,7 +2366,7 @@ Persist the variable metadata attached to `dataset.variables` into the datastore
 On return, each `Variable` in `dataset.variables` will have `variable_id` (and where applicable
 `vocabulary_id`) populated.
 """
-function save_variables!(store::DataStore, dataset::DataSet)::Nothing
+function save_dataset_variables!(store::DataStore, dataset::DataSet)::Nothing
     db = store.store
     if isnothing(db)
         throw(ArgumentError("No datastore connection available in store.store"))
@@ -2148,7 +2380,7 @@ function save_variables!(store::DataStore, dataset::DataSet)::Nothing
         vocab_id = missing
         if var.value_type_id in (TRE_TYPE_CATEGORY, TRE_TYPE_MULTIRESPONSE)
             if !ismissing(var.vocabulary)
-                vocab_id = ensure_vocabulary!(db, var.vocabulary)
+                vocab_id = ensure_vocabulary!(store, var.vocabulary)
                 var.vocabulary_id = Int(vocab_id)
                 var.vocabulary.vocabulary_id = Int(vocab_id)
             elseif !(var.vocabulary_id === missing)
@@ -2161,14 +2393,14 @@ function save_variables!(store::DataStore, dataset::DataSet)::Nothing
 
         # Upsert variable record and capture variable_id.
         variable_id = upsert_variable!(
-            db,
+            store,
             var.domain_id,
             var.name;
             value_type_id=var.value_type_id,
             value_format=value_format,
             vocabulary_id=vocabulary_arg,
             description=var.description,
-            note=missing,
+            note=var.note,
             keyrole=var.keyrole
         )
         var.variable_id = Int(variable_id)
@@ -2203,7 +2435,10 @@ Create a new dataset metadata object from an EAV data file.
 - 'datafile' is the DataFile object representing the EAV data file that the dataset is derived from.
 This function creates a new dataset asset and version, collects variable metadata from the EAV data file,
 and returns a DataSet object containing the dataset metadata.
-It assumes the EAV data is stored in a csv table with columns: record, field_name
+
+**Assumptions**
+- The EAV data is stored in a csv table with columns: record, field_name, and value.
+- The variable meta data is already defined in the datastore for the study, variables not found will be skipped.
 """
 function create_dataset_meta(store::DataStore, study::Study, dataset_name::String, description::String, datafile::DataFile)::DataSet
     # Create the dataset asset and version
@@ -2212,16 +2447,15 @@ function create_dataset_meta(store::DataStore, study::Study, dataset_name::Strin
     register_dataset(store, dataset)
     # Collect variable metadata and EAV fields, then join
     variables = get_study_variables(store, study)
-    eav_variables = get_eav_variables(store, datafile)
-    variables = leftjoin(eav_variables, variables, on=:field_name => :name, makeunique=true)
-    @info "Variables = $(names(variables))"
+    eav_variables = get_eav_variable_names(store, datafile)
+    @info "Found $(nrow(eav_variables)) variables in EAV data"
+    variables = join(eav_variables, variables, on=:field_name => :name, makeunique=true)
     @info "Found $(nrow(variables)) variables in EAV data for dataset $(dataset_name)"
+    if nrow(variables) < nrow(eav_variables)
+        misssedvars = setdiff(unique(String.(eav_variables.field_name)), unique(String.(variables.field_name)))
+        @warn "Not all EAV variables have matching variable metadata in the datastore for study $(study.name): $(misssedvars)."
+    end
     for row in eachrow(variables)
-        @info "Processing variable: $(row.field_name) with ID $(row.variable_id)"
-        if ismissing(row.variable_id)
-            @warn "Skipping variable $(row.field_name) with missing name in EAV data"
-            continue
-        end
         variable = Variable(
             variable_id=row.variable_id,
             domain_id=row.domain_id,
@@ -2356,18 +2590,6 @@ function transform_eav_to_table!(store::DataStore, datafile::DataFile, dataset::
     @info "Transformed EAV data from $(fpath) to table $(tbl)"
     return nothing
 end
-"""
-    dataset_to_dataframe(store::DataStore, dataset::DataSet)::DataFrame
-
-Retrieve a dataset from store.lake and return as a DataFrame
-- `store`: The DataStore object containing the datastore and datalake connections.
-- `dataset`: The DataSet object to be retrieved. NB version must be set.
-"""
-function dataset_to_dataframe(store::DataStore, dataset::DataSet)::DataFrame
-    table = get_datasetname(dataset, include_schema=true)
-    sql = "SELECT * FROM $LAKE_ALIAS.$(table)"
-    return DuckDB.query(store.lake, sql) |> DataFrame
-end
 # Map TRE variable type -> DuckDB SQL type
 """
     tre_type_to_duckdb_sql(value_type_id::Int)::String
@@ -2433,7 +2655,9 @@ function load_query(datastore::DataStore, dataset::DataSet, source_conn::DBInter
     schema = to_ncname(dataset.version.asset.study.name)
     DuckDB.query(datastore.lake, "CREATE SCHEMA IF NOT EXISTS $(schema);")
     table = get_datasetname(dataset, include_schema=false)
-    DBInterface.execute(datastore.lake, create_duckdb_table_sql(schema * "." * table, dataset.variables))
+    full_table_name = schema * "." * table
+    DBInterface.execute(datastore.lake, "DROP TABLE IF EXISTS $(quote_qualified_identifier(full_table_name));")
+    DBInterface.execute(datastore.lake, create_duckdb_table_sql(full_table_name, dataset.variables))
     app = DuckDB.Appender(datastore.lake, table, schema)
     try
         res = DBInterface.execute(source_conn, sql)
@@ -2457,4 +2681,76 @@ function load_query(datastore::DataStore, dataset::DataSet, source_conn::DBInter
     end
 
     return nothing
+end
+"""
+    list_dataset_variables(store::DataStore, dataset::DataSet)::Vector{Variable}
+
+Retrieve the variables associated with a dataset from the datastore.
+- `store`: The DataStore object containing the database connection.
+- `dataset`: The DataSet object for which to retrieve variables.
+This function returns a vector of Variable objects associated with the specified dataset.
+If the dataset already has variables populated, it returns those directly.
+"""
+function list_dataset_variables(store::DataStore, dataset::DataSet)::Vector{Variable}
+    if !isempty(dataset.variables)
+        return dataset.variables
+    end
+    db = store.store
+    sql = raw"""
+        SELECT v.*
+        FROM dataset_variables dv
+        JOIN variables v ON dv.variable_id = v.variable_id
+        WHERE dv.dataset_id = $1;
+    """
+    stmt = DBInterface.prepare(db, sql)
+    df = DBInterface.execute(stmt, (dataset.version.version_id,)) |> DataFrame
+    variables = Vector{Variable}()
+    for row in eachrow(df)
+        var = Variable(
+            variable_id=row.variable_id,
+            domain_id=row.domain_id,
+            name=row.name,
+            value_type_id=row.value_type_id,
+            value_format=coalesce(row.value_format, missing),
+            vocabulary_id=coalesce(row.vocabulary_id, missing),
+            description=coalesce(row.description, missing),
+            note=coalesce(row.note, missing),
+            keyrole=row.keyrole,
+            ontology_namespace=coalesce(row.ontology_namespace, missing),
+            ontology_class=coalesce(row.ontology_class, missing)
+        )
+        if !ismissing(var.vocabulary_id)
+            vocab = get_vocabulary(store, var.vocabulary_id)
+            var.vocabulary = vocab
+        end
+        push!(variables, var)
+    end
+    return variables
+end
+"""
+    list_study_datasets(store::DataStore, study::Study; include_versions=false)::Vector{DataSet}
+
+Retrieve all datasets associated with a study from the datastore.
+- `store`: The DataStore object containing the database connection.
+- `study`: The Study object for which to retrieve datasets.
+- `include_versions`: A boolean flag indicating whether to include all versions of each dataset asset, or just the latest version (default is false).
+This function returns a vector of DataSet objects associated with the specified study.
+"""
+function list_study_datasets(store::DataStore, study::Study; include_versions=false)::Vector{DataSet}
+    study_assets = list_study_assets(store, study; include_versions=true)
+    for asset in study_assets
+        if asset.asset_type == "dataset"
+            if include_versions
+                for version in asset.versions
+                    dataset = DataSet(version=version)
+                    dataset.variables = list_dataset_variables(store, dataset)
+                    push!(datasets, dataset)
+                end
+            else
+                dataset = DataSet(version=get_latest_version(asset))
+                dataset.variables = list_dataset_variables(store, dataset)
+                push!(datasets, dataset)
+            end
+        end
+    end
 end

@@ -27,19 +27,30 @@ using ODBC
 
 export
     DataStore, Version, Vocabulary, VocabularyItem, AbstractStudy, Study, Domain, Entity, EntityRelation,
-    AbstractAsset, Asset, AbstractAssetVersion, AssetVersion, DataFile, Transformation,
-    createdatastore, opendatastore, closedatastore,
-    upsert_study!, upsert_domain!, get_domain, get_study, list_studies, add_study_domain!, create_study!,
-    upsert_entity!, get_entity, upsert_entityrelation!, get_entityrelation, list_domainentities, list_domainrelations,
-    git_commit_info,
-    lookup_variables, get_eav_variables,
-    get_namedkey, get_variable_id, get_variable, get_datasetname, updatevalues, insertdata, insertwithidentity,
-    get_table, selectdataframe, prepareselectstatement, dataset_to_dataframe, dataset_to_arrow, dataset_to_csv,
-    dataset_variables, dataset_column, savedataframe, read_dataset,
-    ingest_redcap_project, register_redcap_datadictionary, transform_eav_to_dataset, list_study_transformations,
-    create_entity!, create_entity_relation!,
+    AbstractAsset, Asset, AbstractAssetVersion, AssetVersion, DataFile, Transformation, DatabaseFlavour,
+    opendatastore, closedatastore,
+    get_domain, add_domain!, update_domain,
+    get_study, list_studies, add_study!, add_study_domain!,
+    get_entity, create_entity!, get_entityrelation, create_entity_relation!, list_domainentities, list_domainrelations,
+    get_variable, add_variable!, list_study_variables, list_domain_variables, list_dataset_variables,
+    create_asset, get_asset, list_study_assets,
+    ingest_file, ingest_file_version, 
+    ingest_redcap_project, transform_eav_to_dataset,
+    read_dataset, sql_to_dataset, list_study_datasets,
+    create_transformation, add_transformation!, add_transformation_input, add_transformation_output,
     sql_meta,
     connect_mssql, mssql_connect, MSSQL_DRIVER_PATH
+
+public
+createdatastore,
+upsert_study!,
+upsert_entity!,upsert_entityrelation!,
+upsert_variable!,
+attach_datafile, attach_datafile_version,
+get_datasetname,
+dataset_to_dataframe,dataset_to_arrow,dataset_to_csv,
+dataset_variables, load_query, save_dataset_variables!,
+register_redcap_datadictionary,list_study_transformations
 
 #region Structure
 Base.@kwdef mutable struct DataStore
@@ -159,6 +170,7 @@ Base.@kwdef mutable struct Variable
     vocabulary_id::Union{Missing,Int} = missing # Reference to a vocabulary if applicable
     keyrole::String = "none" # "none", "record", "external"
     description::Union{Missing,String} = missing
+    note::Union{Missing,String} = missing
     ontology_namespace::Union{Missing,String} = missing
     ontology_class::Union{Missing,String} = missing
     vocabulary::Union{Missing,Vocabulary} = missing
@@ -233,33 +245,6 @@ function get_studyid(store::DataStore, name::AbstractString)::Union{UUID,Nothing
     end
     return UUID(study_id)
 end
-"""
-    lookup_variables(db, variable_names, domain)
-
-Returns a DataFrame with dataset variable names and ids
-"""
-function lookup_variables(db, variable_names, domain)
-    names = DataFrame(:name => variable_names)
-    variables = selectdataframe(db, "variables", ["name", "variable_id", "value_type_id"], ["domain_id"], [domain]) |> DataFrame
-    return innerjoin(variables, names, on=:name) #just the variables in this dataset
-end
-"""
-    savedataframetolake(lake::DBInterface.Connection, df::AbstractDataFrame, name::String, description::String)
-
-Save dataframe to data lake, convert columns of type Missing to Union{String, Missing} for DuckDB compatibility
-NOTE: This function assumes that the ducklake metadatabase is attached as LAKE_ALIAS
-DEPPRECATED: DataFrames should be saved with a valid DataSet object
-"""
-function savedataframetolake(store::DataStore, df::AbstractDataFrame, name::String, description::String)
-    convert_missing_to_string!(df) # Convert columns of type Missing to Union{String, Missing} for DuckDB compatibility
-    DuckDB.register_table(store.lake, df, "__DF")
-    sql = "CREATE OR REPLACE TABLE $LAKE_ALIAS.$(name) AS SELECT * FROM __DF"
-    DBInterface.execute(store.lake, sql)
-    sql = "COMMENT ON TABLE $LAKE_ALIAS.$(name) IS '$(description)'"
-    DBInterface.execute(store.lake, sql)
-    DuckDB.unregister_table(store.lake, "__DF")
-    return nothing
-end
 
 """
 Supporting fuctions
@@ -298,17 +283,43 @@ end
     get_variable(db::DBInterface.Connection, variable_id::Int)
 
 Returns the entry of variable with `variable_id`
+- store: The DataStore object containing the datastore connection.
+- variable_id: The integer ID of the variable to retrieve.
 """
-function get_variable(db::DBInterface.Connection, variable_id::Int)
+function get_variable(store::DataStore, variable_id::Int)::Union{Variable,Missing}
+    db = store.store
     stmt = prepareselectstatement(db, "variables", ["*"], ["variable_id"])
     result = DBInterface.execute(stmt, [variable_id]) |> DataFrame
     if nrow(result) == 0
         return missing
-    else
-        return result
     end
+    variable = Variable(; copy(result[1, :])...)
+    # If the variable has a vocabulary, retrieve it
+    if !ismissing(variable.vocabulary_id)
+        vocab_stmt = prepareselectstatement(db, "vocabularies", ["*"], ["vocabulary_id"])
+        vocab_result = DBInterface.execute(vocab_stmt, [variable.vocabulary_id]) |> DataFrame
+        if nrow(vocab_result) > 0
+            vocabulary = Vocabulary(; copy(vocab_result[1, :])...)
+            # Retrieve vocabulary items
+            item_stmt = prepareselectstatement(db, "vocabulary_items", ["*"], ["vocabulary_id"])
+            item_result = DBInterface.execute(item_stmt, [variable.vocabulary_id]) |> DataFrame
+            items = VocabularyItem[]
+            for row in eachrow(item_result)
+                push!(items, VocabularyItem(; copy(row)...))
+            end
+            vocabulary.items = items
+            variable.vocabulary = vocabulary
+        end
+    end
+    return variable
 end
-
+function get_variable(store::DataStore, domain::AbstractString, name::AbstractString)::Union{Variable,Missing}
+    variable_id = get_variable_id(store.store, domain, name)
+    if ismissing(variable_id)
+        return missing
+    end
+    return get_variable(store, variable_id)
+end
 """
     lines(str)
 
@@ -453,7 +464,7 @@ function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_to
             file_path=commit.script_relpath
         )
         # Save the transformation to the datastore
-        save_transformation!(store, transformation)
+        add_transformation!(store, transformation)
         @info "Created transformation with ID: $(transformation.transformation_id)"
         # Add the data file as an output to the transformation
         add_transformation_output(store, transformation, datafile.version)
@@ -505,7 +516,6 @@ function prepare_datafile(file_path::AbstractString, edam_format::String; compre
     end
 
     datafile.digest = sha256_digest_hex(file_path)
-    @info "File digest: $(datafile.digest)"
 
     return datafile
 end
@@ -565,7 +575,27 @@ function attach_datafile(store::DataStore, assetversion::AssetVersion, file_path
     return datafile
 end
 """
-    attach_new_datafile_version(store::DataStore, assetversion::AssetVersion, version_note::String,
+    ingest_file_version(store::DataStore, file_path::AbstractString, datafile::DataFile)::DataFile
+
+Ingest a new version of an existing data file in the TRE datastore.
+- `store`: The DataStore object containing connection details for the datastore.
+- `file_path`: The full path including the file name to the new file.
+- `datafile`: The existing DataFile object for which a new version is being ingested.
+"""
+function ingest_file_version(store::DataStore, file_path::AbstractString, datafile::DataFile, bumpmajor::Bool=false, bumpminor::Bool=false, note::Union{AbstractString,Missing}=missing)::DataFile
+    # Check if file exists
+    if !isfile(file_path)
+        throw(ArgumentError("File does not exist: $file_path"))
+    end
+    if isnothing(datafile.version)
+        throw(ArgumentError("DataFile must have an associated AssetVersion to ingest a new version."))
+    end
+    new_datafile = ingest_file(store, datafile.version.asset.study, datafile.version.asset.name, file_path, datafile.edam_format;
+        description=note, compress=datafile.compressed, encrypt=datafile.encrypted, new_version=true, bumpmajor=bumpmajor, bumpminor=bumpminor)
+    return new_datafile
+end
+"""
+    attach_datafile_version(store::DataStore, assetversion::AssetVersion, version_note::String,
     file_path::AbstractString, edam_format::String, bumpmajor::Bool, bumpminor::Bool;
     compress::Bool=false, encrypt::Bool=false)::DataFile
 
@@ -583,7 +613,7 @@ Attach a new data file as a new version to an existing asset in the TRE datastor
 This function does not copy the file, it only registers it in the TRE datastore.
 It assumes the file is already in the data lake and creates a new DataFile object associated with a new version of the given asset.
 """
-function attach_new_datafile_version(store::DataStore, assetversion::AssetVersion, version_note::String,
+function attach_datafile_version(store::DataStore, assetversion::AssetVersion, version_note::String,
     file_path::AbstractString, edam_format::String, bumpmajor::Bool, bumpminor::Bool;
     compress::Bool=false, encrypt::Bool=false)::DataFile
     # Prepare the new data file
@@ -656,7 +686,7 @@ function transform_eav_to_dataset(store::DataStore, datafile::DataFile; convert=
             file_path=commit.script_relpath
         )
         # Save the transformation to the datastore
-        save_transformation!(store, transformation)
+        add_transformation!(store, transformation)
         @info "Created transformation with ID: $(transformation.transformation_id)"
         # Add the data file as an input to the transformation
         add_transformation_input(store, transformation, datafile.version)
@@ -671,6 +701,18 @@ function transform_eav_to_dataset(store::DataStore, datafile::DataFile; convert=
     end
 end
 """
+    dataset_to_dataframe(store::DataStore, dataset::DataSet)::DataFrame
+
+Retrieve a dataset from store.lake and return as a DataFrame
+- `store`: The DataStore object containing the datastore and datalake connections.
+- `dataset`: The DataSet object to be retrieved. NB version must be set.
+"""
+function dataset_to_dataframe(store::DataStore, dataset::DataSet)::DataFrame
+    table = get_datasetname(dataset, include_schema=true)
+    sql = "SELECT * FROM $LAKE_ALIAS.$(table)"
+    return DuckDB.query(store.lake, sql) |> DataFrame
+end
+"""
     read_dataset(store::DataStore, dataset::DataSet)::AbstractDataFrame
 
 Read a dataset from the TRE datastore and return it as an AbstractDataFrame.
@@ -678,7 +720,7 @@ Read a dataset from the TRE datastore and return it as an AbstractDataFrame.
 - `dataset`: The DataSet object representing the dataset to be read.
 This function retrieves the dataset from the datastore and converts it to an AbstractDataFrame.
 """
-function read_dataset(store::DataStore, dataset::DataSet)::AbstractDataFrame
+function read_dataset(store::DataStore, dataset::DataSet)::DataFrame
     return dataset_to_dataframe(store, dataset)
 end
 """
@@ -707,7 +749,7 @@ function read_dataset(store::DataStore, study_name::String, dataset_name::String
     return dataset_to_dataframe(store, DataSet(version=version))
 end
 """
-    create_study!(store::DataStore, study::Study, domain::Domain)::Study
+    add_study!(store::DataStore, study::Study, domain::Domain)::Study
 
 Create a new study in the TRE datastore and associate it with a domain.
 - `store`: The DataStore object containing the datastore connection.
@@ -715,7 +757,7 @@ Create a new study in the TRE datastore and associate it with a domain.
 - `domain`: The Domain object representing the domain to associate with the study.
 This function inserts or updates the study in the datastore and links it to the specified domain.
 """
-function create_study!(store::DataStore, study::Study, domain::Domain)::Study
+function add_study!(store::DataStore, study::Study, domain::Domain)::Study
     if isnothing(store)
         throw(ArgumentError("DataStore cannot be nothing"))
     end
@@ -827,7 +869,7 @@ function create_entity_relation!(store::DataStore, subject_name::String, object_
 end
 """
     ingest_file(store::DataStore, study::Study, asset_name::String, file_path::AbstractString, edam_format::String;
-    description::Union{String,Missing}=missing, compress::Bool=false, encrypt::Bool=false, new_version::Bool=false)::DataFile
+    description::Union{String,Missing}=missing, compress::Bool=false, encrypt::Bool=false, new_version::Bool=false, bumpmajor::Bool = false, bumpminor::Bool=false)::Union{DataFile,Nothing}
 
 Ingest a file into the TRE data lake and register it in the TRE datastore.
 - `store`: The DataStore object containing connection details for the datastore and data lake.
@@ -840,12 +882,14 @@ Ingest a file into the TRE data lake and register it in the TRE datastore.
    If true, the file will be compressed using zstd before being copied to the data lake.
 - `encrypt`: Whether the file should be encrypted (default is false). **NOT currently implemented**
 - `new_version`: If true, and an asset with the same name already exists in the study, a new version will be created (default is false).
+- `bumpmajor`: If true, increments the major version number and resets minor and patch to 0 for the new version (default is false).
+- `bumpminor`: If true, increments the minor version number and resets patch to 0 for the new version (default is false).
 This function copies the file to the data lake directory, optionally compresses it,
 and registers it in the TRE datastore as a new asset or a new version of an existing asset.
 It returns the DataFile object representing the ingested file
 """
 function ingest_file(store::DataStore, study::Study, asset_name::String, file_path::AbstractString, edam_format::String;
-    description::Union{String,Missing}=missing, compress::Bool=false, encrypt::Bool=false, new_version::Bool=false)::Union{DataFile,Nothing}
+    description::Union{String,Missing}=missing, compress::Bool=false, encrypt::Bool=false, new_version::Bool=false, bumpmajor::Bool=false, bumpminor::Bool=true)::Union{DataFile,Nothing}
     # Check if file exists
     if !isfile(file_path)
         throw(ArgumentError("File does not exist: $file_path"))
@@ -869,7 +913,7 @@ function ingest_file(store::DataStore, study::Study, asset_name::String, file_pa
         if isnothing(latest_version)
             throw(ArgumentError("Existing asset $asset_name has no versions. Cannot add new version."))
         end
-        version = to_ncname(string(VersionNumber(latest_version.major + 1, latest_version.minor, latest_version.patch)), strict=true)
+        version = to_ncname(string(VersionNumber(latest_version.major + (bumpmajor ? 1 : 0), latest_version.minor + (bumpminor ? 1 : 0), 0)), strict=true)
     end
     # Copy the file to the data lake directory
     dest_path = joinpath(store.lake_data, study.name, base_name * version * ext)
@@ -879,7 +923,7 @@ function ingest_file(store::DataStore, study::Study, asset_name::String, file_pa
     try
         transaction_begin(store)
         if !isnothing(latest_version)
-            datafile = attach_new_datafile_version(store, latest_version, "New version from ingest_datafile", dest_path, edam_format, true, false; compress=compress, encrypt=encrypt)
+            datafile = attach_datafile_version(store, latest_version, "New version from ingest_datafile", dest_path, edam_format, true, false; compress=compress, encrypt=encrypt)
         else
             datafile = attach_datafile(store, study, asset_name, dest_path, edam_format; description=description, compress=compress, encrypt=encrypt)
         end
@@ -893,7 +937,7 @@ function ingest_file(store::DataStore, study::Study, asset_name::String, file_pa
             file_path=commit.script_relpath
         )
         # Save the transformation to the datastore
-        save_transformation!(store, transformation)
+        add_transformation!(store, transformation)
         @info "Created transformation with ID: $(transformation.transformation_id)"
         # Add the data set as an output to the transformation
         add_transformation_output(store, transformation, datafile.version)

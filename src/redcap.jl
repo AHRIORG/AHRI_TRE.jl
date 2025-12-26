@@ -151,7 +151,7 @@ Parses "1, Male | 2, Female" into a vector of items.
 - code:  String (tokenized label; spaces -> `_`)
 - description: original label
 """
-function parse_redcap_choices(s::AbstractString)
+function parse_redcap_choices(s::AbstractString)::Vector{VocabularyItem}
     s = strip(s)
     isempty(s) && return NamedTuple{(:value, :code, :description)}[]
     items = NamedTuple{(:value, :code, :description)}[]
@@ -212,7 +212,31 @@ function parse_redcap_choices(s::AbstractString)
 
         push!(items, (; value=val, code=code, description=label))
     end
-    return items
+    return vocabulary_items(items)
+end
+
+"""
+    vocabulary_items(items) -> Vector{VocabularyItem}
+
+Convert a vector of REDCap choice items (as `NamedTuple`s with keys `:value`, `:code`, `:description`)
+into a vector of `VocabularyItem` structs.
+
+Notes:
+- `vocabulary_id` is set to `0` as a placeholder; it should be populated when the vocabulary is
+  persisted (e.g. via `ensure_vocabulary!`).
+"""
+function vocabulary_items(items)::Vector{VocabularyItem}
+    out = VocabularyItem[]
+    for it in items
+        push!(out, VocabularyItem(
+            vocabulary_item_id=nothing,
+            vocabulary_id=0,
+            value=Int64(it.value),
+            code=String(it.code),
+            description=coalesce(it.description, missing)
+        ))
+    end
+    return out
 end
 """
     map_value_type(field_type::String, validation::Union{Missing,String}) -> Int
@@ -247,83 +271,6 @@ function map_value_type(field_type::AbstractString, validation::Union{Missing,Ab
         return (_VT_STRING, nothing)
     end
 end
-"""
-    ensure_vocabulary!(db, vocab_name::String, description::String,
-                       items::Vector{NamedTuple{(:value,:code,:description),Tuple{Int,String,Union{String,Missing}}}}) -> Int
-
-Creates or reuses a vocabulary by name, and (re)loads items idempotently.
-Returns vocabulary_id.
-"""
-function ensure_vocabulary!(db, vocab_name::String, description::String, items)
-    # 1) Get or create vocabulary
-    q_get = DBInterface.prepare(
-        db,
-        raw"""
-            SELECT vocabulary_id FROM vocabularies WHERE name = $1 LIMIT 1;
-        """
-    )
-    df = DBInterface.execute(q_get, (vocab_name,)) |> DataFrame
-    # Initialize to sentinel; we'll always assign in one of the branches
-    vocab_id = -1
-    if nrow(df) == 0
-        vocab_id = insertwithidentity(db, "vocabularies",
-            ["name", "description"], (vocab_name, description))
-    else
-        vocab_id = df[1, :vocabulary_id]
-        # Keep description up to date
-        DBInterface.execute(db, raw"""UPDATE vocabularies SET description = $2 WHERE vocabulary_id = $1;""",
-            (vocab_id, description))
-    end
-
-    # 2) Load items idempotently: delete & reinsert for simplicity (fast + clean)
-    DBInterface.execute(db, raw"""DELETE FROM vocabulary_items WHERE vocabulary_id = $1;""", (vocab_id,))
-    ins = DBInterface.prepare(
-        db,
-        raw"""
-            INSERT INTO vocabulary_items (vocabulary_id, value, code, description)
-            VALUES ($1,$2,$3,$4);
-        """
-    )
-    for it in items
-        DBInterface.execute(ins, (vocab_id, it.value, it.code, it.description))
-    end
-    return vocab_id
-end
-
-"""
-    upsert_variable!(db, domain_id::Int, name::String; value_type_id::Int, vocabulary_id::Union{Nothing,Int}=nothing, description::Union{Missing,String}=missing) -> Int
-
-Upserts into variables on (domain_id, name). Returns variable_id.
-"""
-function upsert_variable!(db, domain_id::Int, name::String; value_type_id::Int, value_format::Union{Nothing,Missing,String},
-    vocabulary_id::Union{Nothing,Int,Missing,String}=nothing, description=missing, note=missing, keyrole::String="none")
-    # Normalize optional / nullable parameters to proper SQL NULLs for LibPQ
-    if vocabulary_id isa String && lowercase(vocabulary_id) == "nothing"
-        vocabulary_id = missing
-    end
-    vid = (vocabulary_id === nothing || vocabulary_id === missing) ? missing : vocabulary_id
-    desc = (description === nothing || description === missing) ? missing : description
-    nte = (note === nothing || note === missing) ? missing : note
-    fmt = (value_format === nothing || value_format === missing) ? missing : value_format
-    stmt = DBInterface.prepare(
-        db,
-        raw"""
-            INSERT INTO variables (domain_id, name, value_type_id, value_format, vocabulary_id, description, note, keyrole)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-            ON CONFLICT (domain_id, name) DO UPDATE
-            SET value_type_id = EXCLUDED.value_type_id,
-                value_format  = EXCLUDED.value_format,
-                vocabulary_id = EXCLUDED.vocabulary_id,
-                description   = EXCLUDED.description,
-                note          = EXCLUDED.note,
-                keyrole       = EXCLUDED.keyrole
-            RETURNING variable_id;
-        """
-    )
-    df = DBInterface.execute(stmt, (domain_id, name, value_type_id, fmt, vid, desc, nte, keyrole)) |> DataFrame
-    return df[1, :variable_id]
-end
-
 """
     register_redcap_datadictionary(store::DataStore,
     domain_id::Int, redcap_url::String, redcap_token::String;
@@ -375,11 +322,11 @@ function register_redcap_datadictionary(store::DataStore,
             if vtype_id == _VT_ENUM || vtype_id == _VT_MULTIRESPONSE
                 vname = isempty(vocabulary_prefix) ? "dom$(domain_id).$(fname)" : "$(vocabulary_prefix).$(fname)"
                 items = parse_redcap_choices(String(coalesce(choices, "")))
-                vocab_id = ensure_vocabulary!(db, vname, "REDCap choices for $(fname)", items)
+                vocab_id = ensure_vocabulary!(store, vname, "REDCap choices for $(fname)", items)
             end
             value_format = isnothing(value_format) ? missing : value_format
             vocab_arg = (vocab_id === missing) ? missing : Int64(vocab_id)
-            variable_id = upsert_variable!(db, domain_id, fname;
+            variable_id = upsert_variable!(store, domain_id, fname;
                 value_type_id=vtype_id,value_format=value_format,
                 vocabulary_id=vocab_arg,
                 description=flabel,

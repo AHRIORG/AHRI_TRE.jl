@@ -128,34 +128,31 @@ function git_commit_info(dir::AbstractString=@__DIR__; short::Bool=true, script_
     root = try
         readchomp(`$(Git.git()) -C $(dir) rev-parse --show-toplevel`)
     catch
-        return (repo_url="Not in a repository", commit="No commit info", script_relpath=script_path)
+        return (repo_url=missing, commit=missing, script_relpath=missing)
     end
 
     # Current commit hash
     commit = try
         h = readchomp(`$(Git.git()) -C $(root) rev-parse HEAD`)
-        short ? h[1:7] : h
+        short ? String(h[1:7]) : String(h)
     catch
-        nothing
+        missing
     end
 
     # Remote URL (origin)
     repo_url = try
         u = readchomp(`$(Git.git()) -C $(root) config --get remote.origin.url`)
-        isnothing(u) || isempty(u) ? nothing : _normalize_remote(u)
+        isempty(u) ? missing : _normalize_remote(u)
     catch
-        nothing
+        missing
     end
 
     # Script relpath (relative to repo root)
     script_relpath = try
         relpath(abspath(script_path), root)
     catch
-        nothing
+        missing
     end
-    isnothing(repo_url) ? "Not in a repository" : repo_url
-    isnothing(commit) ? "No commit info" : commit
-    isnothing(script_relpath) ? "?" : script_relpath
     return (repo_url=repo_url, commit=commit, script_relpath=script_relpath)
 end
 """

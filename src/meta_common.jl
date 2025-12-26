@@ -636,7 +636,7 @@ end
 #endregion
 #region sql to dataset
 """
-    sql_to_dataset(store::DataStore, study::Study, domain::Domain, dataset_name::String, conn::DBInterface.Connection, db_flavour::AbstractString, sql::String;
+    sql_to_dataset(store::DataStore, study::Study, domain::Domain, dataset_name::String, conn, db_flavour::AbstractString, sql::String;
     description::String, replace::Bool=false, new_version::Union{VersionNumber,Nothing}=nothing)::DataSet
 
 Transform the result of an SQL query into a DataSet stored in the TRE DataStore.
@@ -654,7 +654,13 @@ Transform the result of an SQL query into a DataSet stored in the TRE DataStore.
 # Returns
 The created DataSet object, or `nothing` on failure.
 """
-function sql_to_dataset(store::DataStore, study::Study, domain::Domain, dataset_name::String, conn::DBInterface.Connection, db_flavour::AbstractString, sql::String;
+function sql_to_dataset(store::DataStore, study::Study, domain::Domain, dataset_name::String, conn, db_flavour::AbstractString, sql::String;
+    description::String, replace::Bool=false, new_version::Union{VersionNumber,Nothing}=nothing)::DataSet
+    return sql_to_dataset(store, study, domain, dataset_name, conn, parse_flavour(db_flavour), sql;
+        description=description, replace=replace, new_version=new_version)
+end
+
+function sql_to_dataset(store::DataStore, study::Study, domain::Domain, dataset_name::String, conn, db_flavour::DatabaseFlavour, sql::String;
     description::String, replace::Bool=false, new_version::Union{VersionNumber,Nothing}=nothing)::DataSet
     @info "Saving sql query to datastore"
     if isnothing(store)
@@ -685,22 +691,20 @@ function sql_to_dataset(store::DataStore, study::Study, domain::Domain, dataset_
         register_dataset(store, dataset)
         @info "Registered dataset with version: $(dataset.version), name: $(dataset.version.asset.name)"
         dataset.variables = dataset_meta
-        save_variables!(store, dataset)
+        save_dataset_variables!(store, dataset)
         @info "Saved $(length(dataset.variables)) variables to dataset version $(dataset.version.version_id)"
         # Execute the SQL and save data in the this dataset in the datasore (using the ducklake)
         load_query(store, dataset, conn, sql)
         @info "Loaded data into dataset $(dataset.version.asset.name) version $(dataset.version.version_id)"
         #Create a transformation to record this ingestion
         commit = git_commit_info(; script_path=caller_file_runtime(1))
-        transformation = Transformation(
-            transformation_type="ingest",
-            description="Ingested sql \n$sql\n to dataset $(dataset.version.asset.name) version $(dataset.version.version_id)",
+        transformation = create_transformation("ingest","Ingested sql \n$sql\n to dataset $(dataset.version.asset.name) version $(dataset.version.version_id)";
             repository_url=commit.repo_url,
             commit_hash=commit.commit,
             file_path=commit.script_relpath
         )
         # Save the transformation to the datastore
-        save_transformation!(store, transformation)
+        add_transformation!(store, transformation)
         @info "Created transformation with ID: $(transformation.transformation_id)"
         # Add the data set as an output to the transformation
         add_transformation_output(store, transformation, dataset.version)
