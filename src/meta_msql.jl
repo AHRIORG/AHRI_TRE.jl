@@ -4,7 +4,7 @@
 """
     connect_mssql(server::AbstractString, database::AbstractString,
                   user::AbstractString, password::AbstractString;
-                  driver_path::AbstractString=MSSQL_DRIVER_PATH,
+                  driver_path::AbstractString=ODBC_DRIVER_PATH,
                   encrypt::Bool=true, trust_server_cert::Bool=true) -> ODBC.Connection
 
 Create a connection to a Microsoft SQL Server database using ODBC.
@@ -14,7 +14,7 @@ Create a connection to a Microsoft SQL Server database using ODBC.
 - `database`: The database name to connect to
 - `user`: The username for authentication
 - `password`: The password for authentication
-- `driver_path`: Path to the ODBC driver library (default: MSSQL_DRIVER_PATH)
+- `driver_path`: Path to the ODBC driver library (default: ODBC_DRIVER_PATH)
 - `encrypt`: Whether to use encrypted connection (default: true)
 - `trust_server_cert`: Whether to trust the server certificate (default: true)
 
@@ -38,7 +38,7 @@ end
 """
 function connect_mssql(server::AbstractString, database::AbstractString,
     user::AbstractString, password::AbstractString;
-    driver_path::AbstractString=MSSQL_DRIVER_PATH,
+    driver_path::AbstractString=ODBC_DRIVER_PATH,
     encrypt::Bool=true, trust_server_cert::Bool=true)::ODBC.Connection
     try
         if Sys.isapple()
@@ -60,9 +60,6 @@ function connect_mssql(server::AbstractString, database::AbstractString,
         return nothing
     end
 end
-
-"""Backward-compatible alias for `connect_mssql`."""
-mssql_connect(args...; kwargs...) = connect_mssql(args...; kwargs...)
 #endregion
 
 #region Type Mapping

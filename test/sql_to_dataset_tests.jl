@@ -268,7 +268,7 @@ function setup_mssql_source()
     if !isempty(missing)
         return nothing, "Missing MSSQL env vars: $(join(missing, ", "))"
     end
-    if !isfile(AHRI_TRE.MSSQL_DRIVER_PATH)
+    if !isfile(AHRI_TRE.ODBC_DRIVER_PATH)
         return nothing, "MSSQL ODBC driver not found"
     end
     conn = AHRI_TRE.connect_mssql(values["MSQLServer"], values["MSQLServerDB"], values["MSQLServerUser"], values["MSQLServerPW"])

@@ -37,11 +37,11 @@ export
     ingest_file, ingest_file_version, 
     ingest_redcap_project, transform_eav_to_dataset,
     read_dataset, sql_to_dataset, list_study_datasets,
-    create_transformation, add_transformation!, add_transformation_input, add_transformation_output,
-    sql_meta,
-    connect_mssql, mssql_connect, MSSQL_DRIVER_PATH
+    create_transformation, add_transformation!, add_transformation_input, add_transformation_output
+    
 
 public
+sql_meta, connect_mssql, ODBC_DRIVER_PATH,
 createdatastore,
 upsert_study!,
 upsert_entity!,upsert_entityrelation!,
@@ -967,5 +967,19 @@ include("meta_psql.jl")
 include("meta_mysql.jl")
 include("meta_duckdb.jl")
 include("meta_sqlite.jl")
+
+function __init__()
+    env_file = joinpath(@__DIR__, "..", ".env")
+    try
+        if isfile(env_file)
+            dotenv(env_file)
+        end
+    catch
+        # ignore dotenv/load errors
+    end
+
+    global ODBC_DRIVER_PATH = get(ENV, "ODBC_DRIVER_PATH", DEFAULT_ODBC_DRIVER_PATH)
+    return nothing
+end
 
 end #module

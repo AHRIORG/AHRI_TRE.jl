@@ -62,9 +62,12 @@ const _RE_NAME  = r"^[\p{L}\p{N}\p{Mc}\p{Mn}\p{Pc}\p{Lm}\-\.]+$"
 const _RE_STRICT= r"^[\p{L}\p{N}\p{Mc}\p{Mn}\p{Pc}\p{Lm}]+$"
 
 """
-    MSSQL_DRIVER_PATH
+    ODBC_DRIVER_PATH
 
-Default path to the Microsoft ODBC Driver 18 for SQL Server.
-This is the standard installation path on Debian/Ubuntu systems.
+Path to the Microsoft ODBC Driver for SQL Server.
+
+This is read from the environment variable `ODBC_DRIVER_PATH` (typically via a `.env` file).
+If unset, it falls back to the standard Debian/Ubuntu installation path.
 """
-const MSSQL_DRIVER_PATH = "/opt/microsoft/msodbcsql18/lib64/libmsodbcsql-18.5.so.1.1"
+const DEFAULT_ODBC_DRIVER_PATH = "/opt/microsoft/msodbcsql18/lib64/libmsodbcsql-18.5.so.1.1"
+ODBC_DRIVER_PATH = get(ENV, "ODBC_DRIVER_PATH", DEFAULT_ODBC_DRIVER_PATH)
