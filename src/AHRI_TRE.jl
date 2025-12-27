@@ -29,27 +29,26 @@ export
     DataStore, Version, Vocabulary, VocabularyItem, AbstractStudy, Study, Domain, Entity, EntityRelation,
     AbstractAsset, Asset, AbstractAssetVersion, AssetVersion, DataFile, Transformation, DatabaseFlavour,
     opendatastore, closedatastore,
-    get_domain, add_domain!, update_domain,
-    get_study, list_studies, add_study!, add_study_domain!,
-    get_entity, create_entity!, get_entityrelation, create_entity_relation!, list_domainentities, list_domainrelations,
-    get_variable, add_variable!, list_study_variables, list_domain_variables, list_dataset_variables,
-    create_asset, get_asset, list_study_assets,
-    ingest_file, ingest_file_version, 
+    get_domain, add_domain!, update_domain, get_domains,
+    get_study, get_studies, add_study!, add_study_domain!, get_study_domains,
+    get_entity, create_entity!, get_entityrelation, create_entity_relation!, list_domainentities, list_domainrelations,get_domainentities, get_domainrelations,
+    get_variable, add_variable!, get_domain_variables, get_dataset_variables,
+    create_asset, get_asset, get_study_assets,
+    ingest_file, ingest_file_version, get_datafile_metadata, get_study_datafiles,
     ingest_redcap_project, transform_eav_to_dataset,
-    read_dataset, sql_to_dataset, list_study_datasets,
+    get_dataset, get_dataset_versions, read_dataset, sql_to_dataset, get_study_datasets,
     create_transformation, add_transformation!, add_transformation_input, add_transformation_output
-    
 
 public
-sql_meta, connect_mssql, ODBC_DRIVER_PATH,
+sql_meta,connect_mssql,ODBC_DRIVER_PATH,
 createdatastore,
 upsert_study!,
 upsert_entity!,upsert_entityrelation!,
 upsert_variable!,
-attach_datafile, attach_datafile_version,
+attach_datafile,attach_datafile_version,
 get_datasetname,
 dataset_to_dataframe,dataset_to_arrow,dataset_to_csv,
-dataset_variables, load_query, save_dataset_variables!,
+dataset_variables,load_query,save_dataset_variables!,
 register_redcap_datadictionary,list_study_transformations
 
 #region Structure
@@ -711,6 +710,60 @@ function dataset_to_dataframe(store::DataStore, dataset::DataSet)::DataFrame
     table = get_datasetname(dataset, include_schema=true)
     sql = "SELECT * FROM $LAKE_ALIAS.$(table)"
     return DuckDB.query(store.lake, sql) |> DataFrame
+end
+"""
+    get_dataset(store::DataStore, study_name::String, dataset_name::String)::Union{DataSet,Nothing}
+
+Retrieve a dataset object from the TRE datastore by study name and dataset name.
+- `store`: The DataStore object containing the datastore connection.
+- `study_name`: The name of the study containing the dataset.
+- `dataset_name`: The name of the dataset to be retrieved.
+This function retrieves the study and dataset asset from the datastore, gets the latest version of the dataset,
+and returns a DataSet object.
+Use `read_dataset` to read the actual dataset contents.
+"""
+function get_dataset(store::DataStore, study_name::String, dataset_name::String)::Union{DataSet,Nothing}
+    study = get_study(store, study_name)
+    if isnothing(study)
+        @error "Study not found: $study_name"
+        return nothing
+    end
+    asset = get_asset(store, study, dataset_name; include_versions=true, asset_type="dataset")
+    if isnothing(asset)
+        @error "Dataset asset not found: $dataset_name in study $study_name"
+        return nothing
+    end
+    version = get_latest_version(asset)
+    if isnothing(version)
+        @error "No versions found for dataset asset: $dataset_name in study $study_name"
+        return nothing
+    end
+    return DataSet(version=version)
+end
+"""
+    get_dataset_versions(store::DataStore, study_name::String, dataset_name::String)::Vector{DataSet}
+
+Retrieve all versions of a dataset from the TRE datastore by study name and dataset name.
+- `store`: The DataStore object containing the datastore connection.
+- `study_name`: The name of the study containing the dataset.
+- `dataset_name`: The name of the dataset to be retrieved.
+"""
+function get_dataset_versions(store::DataStore, study_name::String, dataset_name::String)::Vector{DataSet}
+    study = get_study(store, study_name)
+    if isnothing(study)
+        @error "Study not found: $study_name"
+        return DataSet[]
+    end
+    asset = get_asset(store, study, dataset_name; include_versions=true, asset_type="dataset")
+    if isnothing(asset)
+        @error "Dataset asset not found: $dataset_name in study $study_name"
+        return DataSet[]
+    end
+    datasets = DataSet[]
+    for version in asset.versions
+        push!(datasets, DataSet(version=version))
+    end
+    return datasets
 end
 """
     read_dataset(store::DataStore, dataset::DataSet)::AbstractDataFrame

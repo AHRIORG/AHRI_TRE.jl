@@ -1091,13 +1091,13 @@ function get_study(store::DataStore, name::AbstractString)::Union{Study,Nothing}
     return study
 end
 """
-    list_studies(store::DataStore)::Vector{Study}
+    get_studies(store::DataStore)::Vector{Study}
 
 Return a vector of all Study objects in the specified DataStore.
 - 'store' is the DataStore object containing the database connection.
 This function retrieves all studies from the database, ordered by name.
 """
-function list_studies(store::DataStore)::Vector{Study}
+function get_studies(store::DataStore)::Vector{Study}
     db = store.store
     sql = raw"""
         SELECT study_id, name, description, external_id, study_type_id
@@ -1229,6 +1229,28 @@ function get_domain(store::DataStore, name::AbstractString; uri::Union{Nothing,S
     )
 end
 """
+    get_domains(store::DataStore)::Vector{Domain}
+
+Return a vector of all Domain objects in the specified DataStore.
+- 'store' is the DataStore object containing the database connection.
+"""
+function get_domains(store::DataStore)::Vector{Domain}
+    db = store.store
+    sql = raw"""
+        SELECT domain_id, name, uri, description
+          FROM domains
+         ORDER BY name;
+    """
+    stmt = DBInterface.prepare(db, sql)
+    df = DBInterface.execute(stmt) |> DataFrame
+    return [Domain(
+        domain_id=row.domain_id,
+        name=row.name,
+        uri=coalesce(row.uri, missing),
+        description=coalesce(row.description, missing)
+    ) for row in eachrow(df)]
+end
+"""
     add_study_domain!(store::DataStore, study::Study, domain::Domain)
 
 Add a domain to a study by inserting a record into the study_domains table.
@@ -1254,6 +1276,14 @@ function add_study_domain!(store::DataStore, study::Study, domain::Domain)
     end
     return nothing
 end
+"""
+    get_study_domains(store::DataStore, study::Study)::Vector{Domain}
+
+Return a vector of Domain objects associated with the specified Study in the DataStore.
+- 'store' is the DataStore object containing the database connection.
+- 'study' is the Study object containing the study_id.
+This function retrieves all domains linked to the given study from the study_domains table.
+"""
 function get_study_domains(store::DataStore, study::Study)::Vector{Domain}
     db = store.store
     sql = raw"""
@@ -1456,6 +1486,41 @@ function list_domainentities(store::DataStore, domain_id::Int)::DataFrame
     return df
 end
 """
+    get_domainentities(store::DataStore, domain_id::Int)::Vector{Entity}
+
+Return a vector of Entity objects in the specified domain.
+- 'store' is the DataStore object containing the database connection.
+- 'domain_id' is the ID of the domain to list entities from.
+"""
+function get_domainentities(store::DataStore, domain_id::Int)::Vector{Entity}
+    df = list_domainentities(store, domain_id)
+    entities = Vector{Entity}(undef, nrow(df))
+    for i in 1:nrow(df)
+        row = df[i, :]
+        entity = Entity(
+            entity_id=row.entity_id,
+            domain_id=row.domain_id,
+            uuid=UUID(row.uuid),
+            name=row.name,
+            description=coalesce(row.description, missing),
+            ontology_namespace=coalesce(row.ontology_namespace, missing),
+            ontology_class=coalesce(row.ontology_class, missing)
+        )
+        entities[i] = entity
+    end
+    return entities
+end
+"""
+    get_domainentities(store::DataStore, domain::Domain)::Vector{Entity}
+
+Return a vector of Entity objects in the specified domain.
+- 'store' is the DataStore object containing the database connection.
+- 'domain' is the Domain object containing the domain_id.
+"""
+function get_domainentities(store::DataStore, domain::Domain)::Vector{Entity}
+    return get_domainentities(store, domain.domain_id)
+end
+"""
     list_domainrelations(store::DataStore, domain_id::Int)::DataFrame
 
 Return a DataFrame containing all entity relations in the specified domain.
@@ -1473,6 +1538,41 @@ function list_domainrelations(store::DataStore, domain_id::Int)::DataFrame
     df = DBInterface.execute(DBInterface.prepare(conn, sql), (domain_id,)) |> DataFrame
     return df
 end
+"""
+    get_domainrelations(store::DataStore, domain_id::Int)::Vector{EntityRelation}
+
+Return a vector of EntityRelation objects in the specified domain.
+- 'store' is the DataStore object containing the database connection.
+- 'domain_id' is the ID of the domain to list entity relations from.
+"""
+function get_domainrelations(store::DataStore, domain_id::Int)::Vector{EntityRelation}
+    df = list_domainrelations(store, domain_id)
+    relations = Vector{EntityRelation}(undef, nrow(df))
+    for i in 1:nrow(df)
+        row = df[i, :]
+        relation = EntityRelation(
+            entityrelation_id=row.entityrelation_id,
+            entity_id_1=row.entity_id_1,
+            entity_id_2=row.entity_id_2,
+            domain_id=row.domain_id,
+            uuid=UUID(row.uuid),
+            name=row.name,
+            description=coalesce(row.description, missing),
+            ontology_namespace=coalesce(row.ontology_namespace, missing),
+            ontology_class=coalesce(row.ontology_class, missing)
+        )
+        relations[i] = relation
+    end
+    return relations
+end
+"""
+    get_domainrelations(store::DataStore, domain::Domain)::Vector{EntityRelation}
+    
+Return a vector of EntityRelation objects in the specified domain.
+- 'store' is the DataStore object containing the database connection.
+- 'domain' is the Domain object containing the domain_id.
+"""
+get_domainrelations(store::DataStore, domain::Domain)::Vector{EntityRelation} = get_domainrelations(store, domain.domain_id)
 """
     list_study_assets_df(store::DataStore, study::Study; include_versions=true)::DataFrame
 
@@ -1511,14 +1611,14 @@ function list_study_assets_df(store::DataStore, study::Study; include_versions=t
     return DBInterface.execute(DBInterface.prepare(store.store, sql), (study.study_id,)) |> DataFrame
 end
 """
-    list_study_assets(store::DataStore, study::Study; include_versions=true)::Vector{Asset}
+    get_study_assets(store::DataStore, study::Study; include_versions=true)::Vector{Asset}
 Return a DataFrame containing all assets in the specified study.
 - 'store' is the DataStore object containing the database connection.
 - 'study' is the Study object to list assets from.
 - 'include_versions' is a boolean flag indicating whether to include asset versions in the returned Asset objects.
 The DataFrame will contain all columns from the assets table, ordered by name.
 """
-function list_study_assets(store::DataStore, study::Study; include_versions=true)::Vector{Asset}
+function get_study_assets(store::DataStore, study::Study; include_versions=true)::Vector{Asset}
     df = list_study_assets_df(store, study, include_versions=false)
     if nrow(df) == 0
         return Asset[]
@@ -2174,7 +2274,7 @@ function get_eav_variable_names(store::DataStore, datafile::DataFile)::DataFrame
     return DBInterface.execute(stmt) |> DataFrame
 end
 """
-    get_study_variables(store::DataStore, study::Study)::DataFrame
+    get_study_variables_df(store::DataStore, study::Study)::DataFrame
 
 Return a DataFrame containing all variables associated with the specified study.
 - 'store' is the DataStore object containing the database connection.
@@ -2182,10 +2282,11 @@ Return a DataFrame containing all variables associated with the specified study.
 - 'domain' is an optional Domain object to filter variables by domain.
 If `domain` is provided, only variables from that domain are returned.
 """
-function get_study_variables(store::DataStore, study::Study, domain::Union{Domain,Nothing}=nothing)::DataFrame
+function get_study_variables_df(store::DataStore, study::Study, domain::Union{Domain,Nothing}=nothing)::DataFrame
     db = store.store
-    if !isnothing(domain)
-        return selectdataframe(db, "variables", ["*"], ["study_id"], [study.study_id])
+    if isnothing(domain) # use study domains
+        #TODO retrieve all domains for the study and use them to filter variables
+        error("Not implemented: retrieving variables for all domains in a study")
     end
     return selectdataframe(db, "variables", ["*"], ["study_id", "domain_id"], [study.study_id, domain.domain_id])
 end
@@ -2236,7 +2337,7 @@ function get_vocabulary(store::DataStore, vocabulary_id::Int)::Union{Vocabulary,
     return vocabulary
 end
 """
-    list_study_variables(store::DataStore, study::Study, domain::Union{Domain,Nothing}=nothing)::Vector{Variable}
+    get_study_variables(store::DataStore, study::Study, domain::Union{Domain,Nothing}=nothing)::Vector{Variable}
 
 Return a vector of Variable objects associated with the specified study.
 - 'store' is the DataStore object containing the database connection.
@@ -2244,9 +2345,9 @@ Return a vector of Variable objects associated with the specified study.
 - 'domain' is an optional Domain object to filter variables by domain.
 If `domain` is provided, only variables from that domain are returned.
 """
-function list_study_variables(store::DataStore, study::Study, domain::Union{Domain,Nothing}=nothing)::Vector{Variable}
+function get_study_variables(store::DataStore, study::Study; domain::Union{Domain,Nothing}=nothing)::Vector{Variable}
     db = store.store
-    df = get_study_variables(store, study, domain)
+    df = get_study_variables_df(store, study; domain=domain)
     variables = Vector{Variable}()
     for row in eachrow(df)
         var = Variable(
@@ -2270,7 +2371,14 @@ function list_study_variables(store::DataStore, study::Study, domain::Union{Doma
     end
     return variables
 end
-function list_domain_variables(store, domain::Domain)::Vector{Variable}
+"""
+    get_domain_variables(store, domain::Domain)::Vector{Variable}
+
+Return a vector of Variable objects associated with the specified domain.
+- 'store' is the DataStore object containing the database connection.
+- 'domain' is the Domain object containing the domain_id.
+"""
+function get_domain_variables(store, domain::Domain)::Vector{Variable}
     db = store.store
     df = selectdataframe(db, "variables", ["*"], ["domain_id"], [domain.domain_id])
     variables = Vector{Variable}()
@@ -2683,7 +2791,7 @@ function load_query(datastore::DataStore, dataset::DataSet, source_conn::DBInter
     return nothing
 end
 """
-    list_dataset_variables(store::DataStore, dataset::DataSet)::Vector{Variable}
+    get_dataset_variables(store::DataStore, dataset::DataSet)::Vector{Variable}
 
 Retrieve the variables associated with a dataset from the datastore.
 - `store`: The DataStore object containing the database connection.
@@ -2691,7 +2799,7 @@ Retrieve the variables associated with a dataset from the datastore.
 This function returns a vector of Variable objects associated with the specified dataset.
 If the dataset already has variables populated, it returns those directly.
 """
-function list_dataset_variables(store::DataStore, dataset::DataSet)::Vector{Variable}
+function get_dataset_variables(store::DataStore, dataset::DataSet)::Vector{Variable}
     if !isempty(dataset.variables)
         return dataset.variables
     end
@@ -2728,7 +2836,7 @@ function list_dataset_variables(store::DataStore, dataset::DataSet)::Vector{Vari
     return variables
 end
 """
-    list_study_datasets(store::DataStore, study::Study; include_versions=false)::Vector{DataSet}
+    get_study_datasets(store::DataStore, study::Study; include_versions=false)::Vector{DataSet}
 
 Retrieve all datasets associated with a study from the datastore.
 - `store`: The DataStore object containing the database connection.
@@ -2736,21 +2844,97 @@ Retrieve all datasets associated with a study from the datastore.
 - `include_versions`: A boolean flag indicating whether to include all versions of each dataset asset, or just the latest version (default is false).
 This function returns a vector of DataSet objects associated with the specified study.
 """
-function list_study_datasets(store::DataStore, study::Study; include_versions=false)::Vector{DataSet}
-    study_assets = list_study_assets(store, study; include_versions=true)
+function get_study_datasets(store::DataStore, study::Study; include_versions=false)::Vector{DataSet}
+    study_assets = get_study_assets(store, study; include_versions=true)
     for asset in study_assets
         if asset.asset_type == "dataset"
             if include_versions
                 for version in asset.versions
                     dataset = DataSet(version=version)
-                    dataset.variables = list_dataset_variables(store, dataset)
+                    dataset.variables = get_dataset_variables(store, dataset)
                     push!(datasets, dataset)
                 end
             else
                 dataset = DataSet(version=get_latest_version(asset))
-                dataset.variables = list_dataset_variables(store, dataset)
+                dataset.variables = get_dataset_variables(store, dataset)
                 push!(datasets, dataset)
             end
         end
     end
+end
+"""
+    get_datafile(store::DataStore, datafile_id::UUID)::Union{DataFile,Nothing}
+
+Retrieve a data file from the datastore by its ID.
+- `store`: The DataStore object containing the database connection.
+- `datafile_id`: The UUID of the data file to retrieve.
+This function returns a DataFile object if found, or `nothing` if no data file with the specified ID exists.
+"""
+function get_datafile(store::DataStore, datafile_id::UUID; version::AssetVersion=nothing)::Union{DataFile,Nothing}
+    db = store.store
+    sql = raw"""
+        SELECT * 
+        FROM datafiles
+        WHERE datafile_id = $1;
+    """
+    stmt = DBInterface.prepare(db, sql)
+    df = DBInterface.execute(stmt, (datafile_id,)) |> DataFrame
+    if nrow(df) == 0
+        return nothing
+    end
+    row = df[1, :]
+    datafile = DataFile(
+        version=DataFile(
+            version = version,
+            compressed=row.compressed,
+            encrypted=row.encrypted,
+            compression_algorithm=coalesce(row.compression_algorithm, missing),
+            encryption_algorithm=coalesce(row.encryption_algorithm, missing),
+            storage_uri=row.storage_uri,
+            edam_format=coalesce(row.edam_format, missing),
+            digest=coalesce(row.digest, missing),
+        )
+    )
+    return datafile
+end
+"""
+    get_datafile_metadata(store::DataStore, datafile::DataFile)::Datafile
+
+Retrieve the metadata of a data file from the datastore.
+- `store`: The DataStore object containing the database connection.
+- `datafile`: The DataFile object for which to retrieve metadata. It must have a persisted version with a version_id.
+This function returns a DataFile object containing the metadata of the specified data file.
+"""
+function get_datafile_metadata(store::DataStore, datafile::DataFile)::Datafile
+    if isnothing(datafile.version) || isnothing(datafile.version.version_id)
+        throw(ArgumentError("DataFile must have a persisted version with version_id"))
+    end
+    file = get_datafile(store, datafile.version.version_id; version=datafile.version) #create a new instance of DataFile
+    return file
+end
+"""
+    get_study_datafiles(store::DataStore, study::Study)::Vector{DataFile}
+
+Retrieve all data files associated with a study from the datastore.
+- `store`: The DataStore object containing the database connection.
+- `study`: The Study object for which to retrieve data files.
+This function returns a vector of DataFile objects associated with the specified study.
+"""
+function get_study_datafiles(store::DataStore, study::Study; include_versions=false)::Vector{DataFile}
+    study_assets = get_study_assets(store, study; include_versions=true)
+    datafiles = Vector{DataFile}()
+    for asset in study_assets
+        if asset.asset_type == "datafile"
+            if include_versions
+                for version in asset.versions
+                    datafile = get_datafile_metadata(store, DataFile(version=version))
+                    push!(datafiles, datafile)
+                end
+            else
+                datafile = get_datafile_metadata(store, DataFile(version=get_latest_version(asset)))
+                push!(datafiles, datafile)
+            end
+        end
+    end
+    return datafiles
 end

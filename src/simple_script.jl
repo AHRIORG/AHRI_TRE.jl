@@ -31,4 +31,10 @@ datastore = AHRI_TRE.DataStore(
 )
 @info "Execution started at: ", Dates.now()
 datastore = AHRI_TRE.opendatastore(datastore)
-studies = AHRI_TRE.list_studies(datastore)
+try
+  studies = AHRI_TRE.get_studies(datastore)
+  show.(studies)
+finally
+  AHRI_TRE.closedatastore(datastore)
+end
+
