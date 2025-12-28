@@ -70,4 +70,27 @@ This is read from the environment variable `ODBC_DRIVER_PATH` (typically via a `
 If unset, it falls back to the standard Debian/Ubuntu installation path.
 """
 const DEFAULT_ODBC_DRIVER_PATH = "/opt/microsoft/msodbcsql18/lib64/libmsodbcsql-18.5.so.1.1"
-ODBC_DRIVER_PATH = get(ENV, "ODBC_DRIVER_PATH", DEFAULT_ODBC_DRIVER_PATH)
+
+function _resolve_odbc_driver_path(candidate::AbstractString)::String
+    if !isempty(candidate) && isfile(candidate)
+        return String(candidate)
+    end
+
+    # Common misconfiguration: users sometimes append an extra ".so".
+    # Example: ".../libmsodbcsql-18.5.so.1.1.so" -> ".../libmsodbcsql-18.5.so.1.1"
+    stripped = String(candidate)
+    while endswith(stripped, ".so") && !isfile(stripped)
+        stripped = stripped[1:(end - 3)]
+        if isfile(stripped)
+            return stripped
+        end
+    end
+
+    if isfile(DEFAULT_ODBC_DRIVER_PATH)
+        return DEFAULT_ODBC_DRIVER_PATH
+    end
+
+    return String(candidate)
+end
+
+ODBC_DRIVER_PATH = _resolve_odbc_driver_path(get(ENV, "ODBC_DRIVER_PATH", DEFAULT_ODBC_DRIVER_PATH))

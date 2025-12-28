@@ -32,7 +32,7 @@ export
     get_domain, add_domain!, update_domain, get_domains,
     get_study, get_studies, add_study!, add_study_domain!, get_study_domains,
     get_entity, create_entity!, get_entityrelation, create_entity_relation!, list_domainentities, list_domainrelations,get_domainentities, get_domainrelations,
-    get_variable, add_variable!, get_domain_variables, get_dataset_variables,
+    get_variable, add_variable!, get_domain_variables, get_dataset_variables, get_study_variables,
     create_asset, get_asset, get_study_assets,
     ingest_file, ingest_file_version, get_datafile_metadata, get_study_datafiles,
     ingest_redcap_project, transform_eav_to_dataset,
@@ -956,9 +956,9 @@ function ingest_file(store::DataStore, study::Study, asset_name::String, file_pa
     if !isnothing(existing_asset) && !new_version
         throw(ArgumentError("Asset with name $asset_name already exists in study $(study.name). Use `new_version=true` to add a new version."))
     end
-    base_name, ext = splitext(basename(file_path))
+    _, ext = splitext(basename(file_path))
     base_name = to_ncname(asset_name, strict=true) # use the asset name instead of the original filename
-    version = to_ncname(string(VersionNumber(1, 0, 0)), strict=true)
+    version = VersionNumber(1, 0, 0)
     latest_version = nothing
     # if there is an existing asset get the latest version
     if !isnothing(existing_asset)
@@ -966,17 +966,24 @@ function ingest_file(store::DataStore, study::Study, asset_name::String, file_pa
         if isnothing(latest_version)
             throw(ArgumentError("Existing asset $asset_name has no versions. Cannot add new version."))
         end
-        version = to_ncname(string(VersionNumber(latest_version.major + (bumpmajor ? 1 : 0), latest_version.minor + (bumpminor ? 1 : 0), 0)), strict=true)
+        if bumpmajor
+            version = VersionNumber(latest_version.major + 1, 0, 0)
+        elseif bumpminor
+            version = VersionNumber(latest_version.major, latest_version.minor + 1, 0)
+        else
+            version = VersionNumber(latest_version.major, latest_version.minor, latest_version.patch + 1)
+        end
     end
     # Copy the file to the data lake directory
-    dest_path = joinpath(store.lake_data, study.name, base_name * version * ext)
+    version_str = to_ncname(string(version), strict=true)
+    dest_path = joinpath(store.lake_data, study.name, base_name * version_str * ext)
     mkpath(dirname(dest_path)) # Create directory if it doesn't exist
     cp(file_path, dest_path, force=true)
     @info "Copied file to data lake: $dest_path"
     try
         transaction_begin(store)
         if !isnothing(latest_version)
-            datafile = attach_datafile_version(store, latest_version, "New version from ingest_datafile", dest_path, edam_format, true, false; compress=compress, encrypt=encrypt)
+            datafile = attach_datafile_version(store, latest_version, "New version from ingest_datafile", dest_path, edam_format, bumpmajor, bumpminor; compress=compress, encrypt=encrypt)
         else
             datafile = attach_datafile(store, study, asset_name, dest_path, edam_format; description=description, compress=compress, encrypt=encrypt)
         end
@@ -1031,7 +1038,7 @@ function __init__()
         # ignore dotenv/load errors
     end
 
-    global ODBC_DRIVER_PATH = get(ENV, "ODBC_DRIVER_PATH", DEFAULT_ODBC_DRIVER_PATH)
+    global ODBC_DRIVER_PATH = _resolve_odbc_driver_path(get(ENV, "ODBC_DRIVER_PATH", DEFAULT_ODBC_DRIVER_PATH))
     return nothing
 end
 

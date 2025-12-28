@@ -1127,16 +1127,32 @@ This function returns the newly created Domain object with the domain_id set.
 """
 function add_domain!(store::DataStore, domain::Domain)::Domain
     db = store.store
-    # 1) Does a matching domain already exist?
-    sql_get = raw"""
-        SELECT domain_id
-        FROM domains
-        WHERE name = $1
-          AND ( ($2::text IS NULL AND uri IS NULL) OR uri = $2 )
-        LIMIT 1;
-    """
-    stmt_get = DBInterface.prepare(db, sql_get)
-    df = DBInterface.execute(stmt_get, (domain.name, domain.uri)) |> DataFrame
+        uri = ismissing(domain.uri) ? nothing : domain.uri
+        description = ismissing(domain.description) ? missing : domain.description
+
+        # 1) Does a matching domain already exist?
+        # Avoid NULL parameter comparison edge-cases by branching on uri.
+        if uri === nothing
+                sql_get = raw"""
+                        SELECT domain_id
+                            FROM domains
+                         WHERE name = $1
+                             AND uri IS NULL
+                         LIMIT 1;
+                """
+                stmt_get = DBInterface.prepare(db, sql_get)
+                df = DBInterface.execute(stmt_get, (domain.name,)) |> DataFrame
+        else
+                sql_get = raw"""
+                        SELECT domain_id
+                            FROM domains
+                         WHERE name = $1
+                             AND uri = $2
+                         LIMIT 1;
+                """
+                stmt_get = DBInterface.prepare(db, sql_get)
+                df = DBInterface.execute(stmt_get, (domain.name, uri)) |> DataFrame
+        end
 
     if nrow(df) > 0
         error("Domain with name '$(domain.name)' and URI '$(domain.uri)' already exists with domain_id=$(df[1, :domain_id])")
@@ -1147,7 +1163,8 @@ function add_domain!(store::DataStore, domain::Domain)::Domain
         RETURNING domain_id;
     """
     stmt_ins = DBInterface.prepare(db, sql_ins)
-    ins = DBInterface.execute(stmt_ins, (domain.name, domain.uri, domain.description)) |> DataFrame
+    uri_db = uri === nothing ? missing : uri
+    ins = DBInterface.execute(stmt_ins, (domain.name, uri_db, description)) |> DataFrame
     domain.domain_id = ins[1, :domain_id]
 
     return domain
@@ -1168,6 +1185,8 @@ function update_domain(store::DataStore, domain::Domain)::Nothing
     if isnothing(domain.domain_id)
         error("Domain must have a domain_id to be updated")
     end
+    uri = ismissing(domain.uri) ? missing : domain.uri
+    description = ismissing(domain.description) ? missing : domain.description
     sql_upd = raw"""
         UPDATE domains
            SET description = $1,
@@ -1175,7 +1194,7 @@ function update_domain(store::DataStore, domain::Domain)::Nothing
          WHERE domain_id   = $3;
     """
     stmt_upd = DBInterface.prepare(db, sql_upd)
-    DBInterface.execute(stmt_upd, (domain.description, domain.uri, domain.domain_id))
+    DBInterface.execute(stmt_upd, (description, uri, domain.domain_id))
 
     return nothing
 end
@@ -2274,7 +2293,7 @@ function get_eav_variable_names(store::DataStore, datafile::DataFile)::DataFrame
     return DBInterface.execute(stmt) |> DataFrame
 end
 """
-    get_study_variables_df(store::DataStore, study::Study)::DataFrame
+    get_study_variables_df(store::DataStore, study::Study; domain::Union{Domain,Nothing}=nothing)::DataFrame
 
 Return a DataFrame containing all variables associated with the specified study.
 - 'store' is the DataStore object containing the database connection.
@@ -2282,12 +2301,23 @@ Return a DataFrame containing all variables associated with the specified study.
 - 'domain' is an optional Domain object to filter variables by domain.
 If `domain` is provided, only variables from that domain are returned.
 """
-function get_study_variables_df(store::DataStore, study::Study, domain::Union{Domain,Nothing}=nothing)::DataFrame
+function get_study_variables_df(store::DataStore, study::Study; domain::Union{Domain,Nothing}=nothing)::DataFrame
     db = store.store
-    if isnothing(domain) # use study domains
-        #TODO retrieve all domains for the study and use them to filter variables
-        error("Not implemented: retrieving variables for all domains in a study")
+    if isnothing(domain)
+        domains = get_study_domains(store, study)
+        domain_ids = join(string.(getfield.(domains, :domain_id)), ",")
+        if isempty(domain_ids)
+            domain_ids = "-1"  # No domains, so no variables
+        end
+        sql = raw"""
+            SELECT * FROM variables
+            WHERE domain_id IN ($1);
+        """
+        stmt = DBInterface.prepare(db, sql)
+        df = DBInterface.execute(stmt, (domain_ids,)) |> DataFrame
+        return df
     end
+
     return selectdataframe(db, "variables", ["*"], ["study_id", "domain_id"], [study.study_id, domain.domain_id])
 end
 """
@@ -2846,6 +2876,7 @@ This function returns a vector of DataSet objects associated with the specified 
 """
 function get_study_datasets(store::DataStore, study::Study; include_versions=false)::Vector{DataSet}
     study_assets = get_study_assets(store, study; include_versions=true)
+    datasets = Vector{DataSet}()
     for asset in study_assets
         if asset.asset_type == "dataset"
             if include_versions
@@ -2861,6 +2892,7 @@ function get_study_datasets(store::DataStore, study::Study; include_versions=fal
             end
         end
     end
+    return datasets
 end
 """
     get_datafile(store::DataStore, datafile_id::UUID)::Union{DataFile,Nothing}
@@ -2883,19 +2915,16 @@ function get_datafile(store::DataStore, datafile_id::UUID; version::AssetVersion
         return nothing
     end
     row = df[1, :]
-    datafile = DataFile(
-        version=DataFile(
-            version = version,
-            compressed=row.compressed,
-            encrypted=row.encrypted,
-            compression_algorithm=coalesce(row.compression_algorithm, missing),
-            encryption_algorithm=coalesce(row.encryption_algorithm, missing),
-            storage_uri=row.storage_uri,
-            edam_format=coalesce(row.edam_format, missing),
-            digest=coalesce(row.digest, missing),
-        )
+    return DataFile(
+        version=version,
+        compressed=row.compressed,
+        encrypted=row.encrypted,
+        compression_algorithm=coalesce(row.compression_algorithm, missing),
+        encryption_algorithm=missing,
+        storage_uri=row.storage_uri,
+        edam_format=coalesce(row.edam_format, missing),
+        digest=coalesce(row.digest, missing),
     )
-    return datafile
 end
 """
     get_datafile_metadata(store::DataStore, datafile::DataFile)::Datafile
@@ -2905,11 +2934,14 @@ Retrieve the metadata of a data file from the datastore.
 - `datafile`: The DataFile object for which to retrieve metadata. It must have a persisted version with a version_id.
 This function returns a DataFile object containing the metadata of the specified data file.
 """
-function get_datafile_metadata(store::DataStore, datafile::DataFile)::Datafile
+function get_datafile_metadata(store::DataStore, datafile::DataFile)::DataFile
     if isnothing(datafile.version) || isnothing(datafile.version.version_id)
         throw(ArgumentError("DataFile must have a persisted version with version_id"))
     end
-    file = get_datafile(store, datafile.version.version_id; version=datafile.version) #create a new instance of DataFile
+    file = get_datafile_meta(store, datafile.version)
+    if isnothing(file)
+        error("No DataFile metadata found for version_id=$(datafile.version.version_id)")
+    end
     return file
 end
 """
@@ -2924,7 +2956,7 @@ function get_study_datafiles(store::DataStore, study::Study; include_versions=fa
     study_assets = get_study_assets(store, study; include_versions=true)
     datafiles = Vector{DataFile}()
     for asset in study_assets
-        if asset.asset_type == "datafile"
+        if asset.asset_type == "file"
             if include_versions
                 for version in asset.versions
                     datafile = get_datafile_metadata(store, DataFile(version=version))

@@ -33,7 +33,19 @@ datastore = AHRI_TRE.DataStore(
 datastore = AHRI_TRE.opendatastore(datastore)
 try
   studies = AHRI_TRE.get_studies(datastore)
-  show.(studies)
+  println("Studies available in the TRE:")
+  for study in studies
+    println("$(study.name) (ID: $(study.study_id))")
+      datasets = AHRI_TRE.get_study_datasets(datastore, study)
+      for dataset in datasets
+        println(" - $(dataset.version.asset.name) v$(VersionNumber(dataset.version.major, dataset.version.minor, dataset.version.patch)) ")
+      end
+  end
+  test_variables = AHRI_TRE.get_study_variables(datastore, get_study(datastore, "Test"))
+  println("\nVariables in 'Test' study:")
+  for variable in test_variables
+    println("$(variable.name), $(variable.description), $(variable.value_type_id)")
+  end
 finally
   AHRI_TRE.closedatastore(datastore)
 end
