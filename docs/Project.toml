@@ -1,2 +1,6 @@
 [deps]
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+DocumenterTypst = "d7fd56dd-41bc-4b2d-b658-79a5840b2e09"
+
+[sources]
+DocumenterTypst = {rev = "main", url = "https://github.com/lucifer1004/DocumenterTypst.jl"}

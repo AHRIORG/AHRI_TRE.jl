@@ -27,12 +27,9 @@ function replace_database(conn::DBInterface.Connection, database::String, user::
     DBInterface.execute(conn, "CREATE DATABASE \"$(database)\" OWNER \"$(user)\";")
 end
 """
-    createdatabase(conn::DBInterface.Connection; replace=false)
+     createdatabase(conn::DBInterface.Connection; replace=false)
 
-Build the TRE schema objects in an existing PostgreSQL database connection.
-This function no longer creates or drops the physical database; that responsibility has been
-moved to `createdatastore` (see refactor 2b). The DuckDB/ducklake metadata database creation
-code remains untouched in `createdatastore`.
+Create the AHRI_TRE database schema in PostgreSQL.
 """
 function createdatabase(conn::DBInterface.Connection)
     createstudies(conn)
@@ -43,6 +40,13 @@ function createdatabase(conn::DBInterface.Connection)
     # createmapping(conn) should be stored in the DuckDB lake
     return nothing
 end
+"""
+    opendatastore(store::DataStore)::DataStore
+
+Open a database connection in a DataStore object
+- `store`: A DataStore object with connection parameters
+- returns: The DataStore object with open connections
+"""
 function opendatastore(store::DataStore)::DataStore
     conn, lake = opendatastore(store.server, store.user, store.password, store.dbname, store.lake_data, store.lake_db,
         store.lake_user, store.lake_password)
@@ -51,10 +55,22 @@ function opendatastore(store::DataStore)::DataStore
     return store
 end
 """
-    opendatastore(server::AbstractString, user::AbstractString, password::AbstractString, database::AbstractString, lake_data::Union{String,Nothing}=nothing, lake_db::Union{String,Nothing}=nothing)
-Open a database connection to a PostgreSQL server with optional DuckDB data lake support.
-This function connects to a PostgreSQL server using the provided credentials and database name.
-"""
+    opendatastore(server::AbstractString, user::AbstractString, password::AbstractString, database::AbstractString,
+    lake_data::Union{String,Nothing}=nothing, lake_db::Union{String,Nothing}=nothing,
+    lake_user::Union{String,Nothing}=nothing, lake_password::Union{String,Nothing}=nothing; port::Integer=5432)
+
+Open a PostgreSQL database connection to the datastore, and a DuckDB connection to the underlying ducklake
+- `server`: The PostgreSQL server hostname or IP
+- `user`: The PostgreSQL username
+- `password`: The PostgreSQL password
+- `database`: The PostgreSQL database name
+- `lake_data`: Path to the DuckDB lake data directory
+- `lake_db`: Name of the DuckDB lake metadata database
+- `lake_user`: Username for the lake connection
+- `lake_password`: Password for the lake connection
+- `port`: The PostgreSQL server port (default 5432)
+- returns: A tuple of (PostgreSQL connection, DuckDB lake connection)
+    """
 function opendatastore(server::AbstractString, user::AbstractString, password::AbstractString, database::AbstractString,
     lake_data::Union{String,Nothing}=nothing, lake_db::Union{String,Nothing}=nothing,
     lake_user::Union{String,Nothing}=nothing, lake_password::Union{String,Nothing}=nothing; port::Integer=5432)
@@ -93,6 +109,7 @@ end
     closedatastore(store::DataStore)
 
 Close the connections in a DataStore object
+- `store`: A DataStore object with open connections
 """
 function closedatastore(store::DataStore)
     DBInterface.close!(store.store)
@@ -106,6 +123,9 @@ end
     get_table(conn::DBInterface.Connection, table::String)::AbstractDataFrame
 
 Retrieve table `table` as a DataFrame from `conn`
+- `conn`: The database connection
+- `table`: The name of the table to retrieve
+- returns: A DataFrame containing the table data
 """
 function get_table(conn::DBInterface.Connection, table::String)::AbstractDataFrame
     sql = "SELECT * FROM $(table)"
@@ -122,6 +142,10 @@ makeparams(n) = ["\$" * string(i) for i in 1:n]  # e.g. ["$1","$2",...]
     savedataframe(con::DBInterface.Connection, df::AbstractDataFrame, table)
 
 Save a DataFrame to a database table, the names of the dataframe columns should be identical to the table column names in the database
+- `con`: The database connection
+- `df`: The DataFrame to save
+- `table`: The name of the table to save the data into
+- returns: nothing
 """
 function savedataframe(con::DBInterface.Connection, df::AbstractDataFrame, table)
     colnames = names(df)
@@ -131,11 +155,16 @@ function savedataframe(con::DBInterface.Connection, df::AbstractDataFrame, table
     for row in eachrow(df)
         DBInterface.execute(stmt, [row[c] for c in colnames])
     end
+    return nothing
 end
 """
     prepareinsertstatement(conn::DBInterface.Connection, table, columns)
 
 Prepare an insert statement for PostgreSQL into table for columns
+    - `conn`: The database connection
+    - `table`: The name of the table to insert into
+    - `columns`: A vector of column names to insert into
+- returns: A prepared statement object
 """
 function prepareinsertstatement(conn::DBInterface.Connection, table, columns)
     paramnames = makeparams(length(columns))
@@ -147,6 +176,13 @@ end
     updatevalues(conn::DBInterface.Connection, table, condition_column, condition_value, columns, values)
 
 Update value of column given condition_value in condition_column
+- `conn`: The database connection
+- `table`: The name of the table to update
+- `condition_column`: The name of the column to filter on
+- `condition_value`: The value to filter on
+- `columns`: A vector of column names to update
+- `values`: A vector of values corresponding to the columns to update
+- returns: nothing
 """
 function updatevalues(conn::DBInterface.Connection, table, condition_column, condition_value, columns, values)
     assigns = [string(col, " = \$", i) for (i, col) in enumerate(columns)]
@@ -159,6 +195,11 @@ end
     insertwithidentity(conn::DBInterface.Connection, table, columns, values)
 
 Insert a record, returning the identity column value
+- `conn`: The database connection
+- `table`: The name of the table to insert into
+- `columns`: A vector of column names to insert
+- `values`: A vector of values corresponding to the columns to insert
+- returns: The value of the identity column for the inserted record
 """
 function insertwithidentity(conn::DBInterface.Connection, table, columns, values)
     params = makeparams(length(columns))
@@ -180,6 +221,11 @@ end
     insertdata(conn::DBInterface.Connection, table, columns, values)
 
 Insert a set of values into a table, columns list the names of the columns to insert, and values the values to insert
+- `conn`: The database connection
+- `table`: The name of the table to insert into
+- `columns`: A vector of column names to insert
+- `values`: A vector of values corresponding to the columns to insert
+- returns: nothing
 """
 function insertdata(conn::DBInterface.Connection, table, columns, values)
     stmt = prepareinsertstatement(conn, table, columns)
@@ -226,7 +272,8 @@ end
 """
     createstudies(conn::DBInterface.Connection)
 
-Creates tables to record a study and associated site/s for deaths contributed to the TRE (PostgreSQL version)
+Create the studies and study_types tables in PostgreSQL datastore
+- `conn`: The database connection
 """
 function createstudies(conn::DBInterface.Connection)
     sql = raw"""
@@ -321,7 +368,8 @@ end
 """
     initstudytypes()
 
-Default study types
+Initialize the study_types table with standard study types
+- returns: SQL string to insert the study types
 """
 initstudytypes() = """
     -- Insert the values
@@ -372,7 +420,13 @@ initstudytypes() = """
 """
     createtransformations(conn::DBInterface.Connection)
 
-Create tables to record data transformations and data ingests
+Create tables to record data transformations and ingests
+Transformation types:
+- ingest: Ingesting data into the TRE
+- transform: Transforming existing data in the TRE
+- entity: Creating entity-instances from ingested or transformed data
+- export: Exporting datasets from the TRE
+- repository: Transferring datasets to the associated data repository
 """
 function createtransformations(conn::DBInterface.Connection)
     # Create ENUM type if it does not exist
@@ -525,24 +579,30 @@ initvalue_types() = DataFrame([(value_type_id=TRE_TYPE_INTEGER, value_type="xsd:
     updatevariable_vocabulary(conn::DBInterface.Connection, name, domain_id, vocabulary_id)
 
 Update variable vocabulary
+- `conn`: The database connection
+- `name`: The name of the variable (supports SQL LIKE patterns)
+- `domain_id`: The domain ID of the variable
+- `vocabulary_id`: The new vocabulary ID to set
+- returns: nothing
 """
 function updatevariable_vocabulary(conn::DBInterface.Connection, name, domain_id, vocabulary_id)
     sql = raw"UPDATE variables SET vocabulary_id = $1 WHERE name LIKE $2 AND domain_id = $3;"
     stmt = DBInterface.prepare(conn, sql)
     DBInterface.execute(stmt, (vocabulary_id, "%$name%", domain_id))
+    return nothing
 end
 """
     createassets(conn::DBInterface.Connection)
 
 Create tables to record data assets, rows, data and links to the transformations that use/created the assets
 A digital asset is a dataset or file that is stored in the TRE datalake.
-The asset_versions table tracks different versions of the assets, with a version label and note. 
-An asset can have multiple versions, and the latest version is flagged by the is_latest flag set as TRUE.
-The datasets table is a type of asset that is linked to the asset_versions table and managed through the ducklake extension.
-The datafiles table stores references to files in the data lake, with metadata such as compression, encryption, storage URI, format, and digest.
-The transformation_inputs and transformation_outputs tables link transformations to the asset versions they use or produce.
-The dataset_variables table links datasets to the variables (columns) they contain, representing the schema of the dataset.
-The data_asset_entities table links assets to entity instances, allowing for tracking which entities are associated with specific assets.
+- The `asset_versions` table tracks different versions of the assets, with a version label and note. 
+    An asset can have multiple versions, and the latest version is flagged by the `is_latest` flag set as TRUE.
+- The `datasets` table is a type of asset that is linked to the `asset_versions` table and managed through the ducklake extension.
+- The `datafiles` table stores references to files in the data lake, with metadata such as compression, encryption, storage URI, format, and digest.
+- The `transformation_inputs` and `transformation_outputs` tables link transformations to the asset versions they use or produce.
+- The `dataset_variables` table links datasets to the variables (columns) they contain, representing the schema of the dataset.
+- The `data_asset_entities` table links assets to entity instances, allowing for tracking which entities are associated with specific assets.
 """
 function createassets(conn::DBInterface.Connection)
     # ENUM type for asset_type
