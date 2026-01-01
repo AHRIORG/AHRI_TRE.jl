@@ -2647,7 +2647,7 @@ function create_dataset_meta(store::DataStore, study::Study, dataset_name::Strin
     variables = get_study_variables(store, study)
     eav_variables = get_eav_variable_names(store, datafile)
     @info "Found $(nrow(eav_variables)) variables in EAV data"
-    variables = join(eav_variables, variables, on=:field_name => :name, makeunique=true)
+    variables = DataFrames.join(eav_variables, variables, on=:field_name => :name, makeunique=true)
     @info "Found $(nrow(variables)) variables in EAV data for dataset $(dataset_name)"
     if nrow(variables) < nrow(eav_variables)
         misssedvars = setdiff(unique(String.(eav_variables.field_name)), unique(String.(variables.field_name)))

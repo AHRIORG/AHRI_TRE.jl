@@ -4,6 +4,12 @@ const TEST_DIR = dirname(@__FILE__)
 const PROJECT_ROOT = dirname(TEST_DIR)
 const ROOT_ENV_FILE = joinpath(PROJECT_ROOT, ".env")
 const TEST_ENV_FILE = joinpath(TEST_DIR, ".env")
+const DUCKDB_ENV_SQL = joinpath(TEST_DIR, "duckdb_testenv.sql")
+const SQLITE_ENV_SQL = joinpath(TEST_DIR, "sqlite_testenv.sql")
+const POSTGRES_ENV_SQL = joinpath(TEST_DIR, "postgres_test.sql")
+const SQL_QUERY = "SELECT cause, COUNT(*) AS n FROM deaths GROUP BY cause"
+const DUCKDB_TEST_DB = joinpath(TEST_DIR, "duckdb_test.db")
+const SQLITE_TEST_DB = joinpath(TEST_DIR, "sqlite_test.db")
 
 # Load root env first, then allow test/.env to override for test runs.
 if isfile(ROOT_ENV_FILE)

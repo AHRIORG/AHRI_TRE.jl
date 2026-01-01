@@ -4,9 +4,6 @@ using DuckDB
 using DBInterface
 using DataFrames
 
-const TEST_DIR = dirname(@__FILE__)
-const DUCKDB_ENV_SQL = joinpath(TEST_DIR, "duckdb_testenv.sql")
-const DUCKDB_TEST_DB = joinpath(TEST_DIR, "duckdb_test.db")
 
 """
     setup_duckdb_test_db() -> DBInterface.Connection

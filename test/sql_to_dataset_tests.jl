@@ -9,12 +9,6 @@ using SQLite
 using LibPQ
 using ODBC
 
-const TEST_DIR = dirname(@__FILE__)
-const DUCKDB_ENV_SQL = joinpath(TEST_DIR, "duckdb_testenv.sql")
-const SQLITE_ENV_SQL = joinpath(TEST_DIR, "sqlite_testenv.sql")
-const POSTGRES_ENV_SQL = joinpath(TEST_DIR, "postgres_test.sql")
-const SQL_QUERY = "SELECT cause, COUNT(*) AS n FROM deaths GROUP BY cause"
-
 function gather_env(keys::Vector{String})
     values = Dict{String,String}()
     missing = String[]
@@ -343,7 +337,8 @@ end
 
         conn, err = setup_mssql_source()
         if isnothing(conn)
-            @test false && "MSSQL source setup failed: $err"
+            @error "MSSQL source setup failed: $err"
+            @test false
         end
         @testset "MSSQL source" begin
             try

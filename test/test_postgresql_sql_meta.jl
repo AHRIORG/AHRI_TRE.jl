@@ -5,9 +5,6 @@ using DBInterface
 using DataFrames
 using Random
 
-const TEST_DIR = dirname(@__FILE__)
-const POSTGRES_ENV_SQL = joinpath(TEST_DIR, "postgres_test.sql")
-
 function _tre_pg_port()::Int
     port_str = get(ENV, "TRE_PORT", "5432")
     try
