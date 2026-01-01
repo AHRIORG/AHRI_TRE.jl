@@ -35,26 +35,30 @@ try
     study = nothing
     domain = nothing
     # First create or retrieve a domain that the study can use for its data
-    # Here we assume the domain does not exist, so we create it
-    domain = Domain(
-        name="APCC",
-        uri="https://apcc.africa",
-        description="African Population Cohorts Consortium"
-    )
-    domain = upsert_domain!(datastore, domain)
-    @info "Domain inserted: $(domain.name) with ID $(domain.domain_id)"
+    domain = get_domain(datastore, "APCC")
+    if isnothing(domain)
+        @info "Domain '$(domain.name)' not found, creating new domain."
+        domain = Domain(
+            name="APCC",
+            uri="https://apcc.africa",
+            description="African Population Cohorts Consortium"
+        )
+        domain = add_domain!(datastore, domain)
+    end
+    @info "Domain: $(domain.name) with ID $(domain.domain_id)"
     # Now create a study, or retrieve the study the REDCap project should be associated with
-    # Here we assume the study does not exist, so we create it
-    study = Study(
-        name="APCC",
-        description="Update APCC cohort data and contact information",
-        external_id="APCC",
-        study_type_id=3
-    )
-    study = AHRI_TRE.upsert_study!(datastore, study)
-    @info "Study created: $(study.name) with ID $(study.study_id)"
-    # Link the study to a domain
-    add_study_domain!(datastore, study, domain)
+    study = get_study(datastore, "APCC")
+    if isnothing(study)
+        @info "Study '$(study.name)' not found, creating new study."
+        study = Study(
+            name="APCC",
+            description="Update APCC cohort data and contact information",
+            external_id="APCC",
+            study_type_id=3
+        )
+        study = AHRI_TRE.add_study!(datastore, study, domain)
+    end
+    @info "Study: $(study.name) with ID $(study.study_id)"
     # Now we can ingest the REDCap project data
     @info "Ingesting REDCap project data into the datastore"
     datafile = ingest_redcap_project(datastore, ENV["REDCAP_API_URL"], ENV["REDCAP_API_TOKEN"], study, domain)

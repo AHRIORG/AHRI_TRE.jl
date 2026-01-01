@@ -36,15 +36,16 @@ try
   println("Studies available in the TRE:")
   for study in studies
     println("$(study.name) (ID: $(study.study_id))")
-      datasets = AHRI_TRE.get_study_datasets(datastore, study)
-      for dataset in datasets
-        println(" - $(dataset.version.asset.name) v$(VersionNumber(dataset.version.major, dataset.version.minor, dataset.version.patch)) ")
-      end
-  end
-  test_variables = AHRI_TRE.get_study_variables(datastore, get_study(datastore, "Test"))
-  println("\nVariables in 'Test' study:")
-  for variable in test_variables
-    println("$(variable.name), $(variable.description), $(variable.value_type_id)")
+    datasets = AHRI_TRE.get_study_datasets(datastore, study)
+    println("Datasets in '$(study.name)' study:")
+    for dataset in datasets
+      println(" - $(dataset.version.asset.name) v$(VersionNumber(dataset.version.major, dataset.version.minor, dataset.version.patch)) ")
+    end
+    test_variables = AHRI_TRE.get_study_variables(datastore, study)
+    println("\nVariables in '$(study.name)' study:")
+    for variable in test_variables
+      println("$(variable.name), $(variable.description), $(variable.value_type_id)")
+    end
   end
 finally
   AHRI_TRE.closedatastore(datastore)

@@ -69,7 +69,7 @@ function ensure_test_study_and_domain!(store::AHRI_TRE.DataStore)
     domain = AHRI_TRE.get_domain(store, "Test")
     if isnothing(domain)
         domain = AHRI_TRE.Domain(name="Test", description="Test domain")
-        domain = AHRI_TRE.upsert_domain!(store, domain)
+        domain = AHRI_TRE.add_domain!(store, domain)
     end
     AHRI_TRE.add_study_domain!(store, study, domain)
     return study, domain

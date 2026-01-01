@@ -31,13 +31,13 @@ export
     opendatastore, closedatastore,
     get_domain, add_domain!, update_domain, get_domains,
     get_study, get_studies, add_study!, add_study_domain!, get_study_domains,
-    get_entity, create_entity!, get_entityrelation, create_entity_relation!, list_domainentities, list_domainrelations,get_domainentities, get_domainrelations,
+    get_entity, create_entity!, get_entityrelation, create_entity_relation!, list_domainentities, list_domainrelations, get_domainentities, get_domainrelations,
     get_variable, add_variable!, get_domain_variables, get_dataset_variables, get_study_variables,
     create_asset, get_asset, get_study_assets,
     ingest_file, ingest_file_version, get_datafile_metadata, get_study_datafiles,
     ingest_redcap_project, transform_eav_to_dataset,
     get_dataset, get_dataset_versions, read_dataset, sql_to_dataset, get_study_datasets,
-    create_transformation, add_transformation!, add_transformation_input, add_transformation_output
+    create_transformation, add_transformation!, add_transformation_input, add_transformation_output, list_study_transformations
 
 public
 sql_meta,connect_mssql,
@@ -49,7 +49,7 @@ attach_datafile,attach_datafile_version,
 get_datasetname,
 dataset_to_dataframe,dataset_to_arrow,dataset_to_csv,
 dataset_variables,load_query,save_dataset_variables!,
-register_redcap_datadictionary,list_study_transformations
+register_redcap_datadictionary
 
 #region Structure
 Base.@kwdef mutable struct DataStore
@@ -641,7 +641,7 @@ function attach_datafile_version(store::DataStore, assetversion::AssetVersion, v
 end
 
 """
-    transform_eav_to_dataset(store::DataStore, datafile::DataFile)::DataSet
+    transform_eav_to_dataset(store::DataStore, datafile::DataFile)::Union{DataSet, Nothing}
 
 Transform an EAV (Entity-Attribute-Value) data file into a dataset.
 - 'store' is the DataStore object containing the database connection.
@@ -650,10 +650,10 @@ Transform an EAV (Entity-Attribute-Value) data file into a dataset.
 This function creates a new dataset in the database by pivoting the EAV data into a wide format.
 It aggregates multiple values for the same field per record into a single column.
 The dataset name is derived from the datafile's asset name, dropping the "_eav" suffix if present.
-Returns a DataSet object representing the transformed data.
+Returns a DataSet object representing the transformed data, or nothing if an error occurred.
 This function assumes the EAV data is stored in a csv table with columns: record, field_name, and value.
 """
-function transform_eav_to_dataset(store::DataStore, datafile::DataFile; convert=true)::DataSet
+function transform_eav_to_dataset(store::DataStore, datafile::DataFile; convert=true)::Union{DataSet,Nothing}
     #set dataset name to the datafile asset name, drop "_eav" suffix if present
     asset = datafile.version.asset
     if isnothing(asset)

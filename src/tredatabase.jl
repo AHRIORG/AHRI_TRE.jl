@@ -2495,13 +2495,16 @@ function get_domain_variables(store, domain::Domain)::Vector{Variable}
     return variables
 end
 """
-    ensure_vocabulary!(db, vocab_name::String, description::String,
-                       items::Vector{NamedTuple{(:value,:code,:description),Tuple{Int,String,Union{String,Missing}}}}) -> Int
+    ensure_vocabulary!(store::DataStore, vocab_name::String, description::String, items::AbstractVector{<:AbstractVocabularyItem})::Int
 
 Creates or reuses a vocabulary by name, and (re)loads items idempotently.
+- 'store' is the DataStore object containing the database connection.
+- 'vocab_name' is the name of the vocabulary to ensure.
+- 'description' is a description of the vocabulary.
+- 'items' is a vector of AbstractVocabularyItem objects to load into the vocabulary.
 Returns vocabulary_id.
 """
-function ensure_vocabulary!(store::DataStore, vocab_name::String, description::String, items::Vector{AbstractVocabularyItem})::Int
+function ensure_vocabulary!(store::DataStore, vocab_name::String, description::String, items::AbstractVector{<:AbstractVocabularyItem})::Int
     # 1) Get or create vocabulary
     db = store.store
     q_get = DBInterface.prepare(
@@ -2644,10 +2647,12 @@ function create_dataset_meta(store::DataStore, study::Study, dataset_name::Strin
     dataset = DataSet(version=get_latest_version(new_asset))
     register_dataset(store, dataset)
     # Collect variable metadata and EAV fields, then join
-    variables = get_study_variables(store, study)
+    variables = get_study_variables_df(store, study)
     eav_variables = get_eav_variable_names(store, datafile)
     @info "Found $(nrow(eav_variables)) variables in EAV data"
-    variables = DataFrames.join(eav_variables, variables, on=:field_name => :name, makeunique=true)
+    # Rename 'name' column to 'field_name' for joining and consistency
+    rename!(variables, :name => :field_name)
+    variables = innerjoin(eav_variables, variables, on=:field_name, makeunique=false)
     @info "Found $(nrow(variables)) variables in EAV data for dataset $(dataset_name)"
     if nrow(variables) < nrow(eav_variables)
         misssedvars = setdiff(unique(String.(eav_variables.field_name)), unique(String.(variables.field_name)))
