@@ -50,11 +50,15 @@ WORKDIR /workspace
 
 ENV JULIA_PROJECT=/workspace
 
+# Keep the Julia depot in the default location so global environments (e.g. @v1.12)
+# live under /root/.julia/environments and are visible to the VS Code Julia extension.
+ENV JULIA_DEPOT_PATH=/root/.julia
+
 # Copy only Project.toml to allow fresh dependency resolution
 COPY Project.toml ./
 
 # Install Revise into the default global Julia environment and auto-load it for REPL sessions
-RUN julia -e 'import Pkg; env = "@v$(VERSION.major).$(VERSION.minor)"; Pkg.activate(env); Pkg.add("Revise"); Pkg.precompile()'
+RUN julia -e 'import Pkg; envdir = joinpath(DEPOT_PATH[1], "environments", "v$(VERSION.major).$(VERSION.minor)"); Pkg.activate(envdir); Pkg.add("Revise"); Pkg.precompile()'
 
 RUN mkdir -p /root/.julia/config && \
     printf '%s\n' \
