@@ -4,7 +4,6 @@
 /Manifest.toml
 /docs/build/
 *.env
-test*.jl
 *.log
 .DS_Store
 .vscode/
