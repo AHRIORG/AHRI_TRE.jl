@@ -2,21 +2,10 @@ using AHRI_TRE
 using Test
 using LibPQ
 using DBInterface
-using ConfigEnv
 using DataFrames
 using Random
 
-# Load environment variables from .env file (works when run via Pkg.test())
-# const PROJECT_ROOT = dirname(dirname(@__FILE__))
-# const ENV_FILE = joinpath(PROJECT_ROOT, ".env")
-
-if isfile(ENV_FILE)
-    dotenv(ENV_FILE)
-else
-    @warn "No .env file found at: $ENV_FILE"
-end
-
-# const TEST_DIR = dirname(@__FILE__)
+const TEST_DIR = dirname(@__FILE__)
 const POSTGRES_ENV_SQL = joinpath(TEST_DIR, "postgres_test.sql")
 
 function _tre_pg_port()::Int

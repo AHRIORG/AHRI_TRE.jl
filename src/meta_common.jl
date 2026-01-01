@@ -689,7 +689,7 @@ function sql_to_dataset(store::DataStore, study::Study, domain::Domain, dataset_
         end
         dataset = DataSet(version=get_latest_version(existing_asset))
         register_dataset(store, dataset)
-        @info "Registered dataset with version: $(dataset.version), name: $(dataset.version.asset.name)"
+        @info "Registered dataset with name: $(dataset.version.asset.name)"
         dataset.variables = dataset_meta
         save_dataset_variables!(store, dataset)
         @info "Saved $(length(dataset.variables)) variables to dataset version $(dataset.version.version_id)"

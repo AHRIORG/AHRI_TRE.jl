@@ -40,7 +40,7 @@ export
     create_transformation, add_transformation!, add_transformation_input, add_transformation_output
 
 public
-sql_meta,connect_mssql,ODBC_DRIVER_PATH,
+sql_meta,connect_mssql,
 createdatastore,
 upsert_study!,
 upsert_entity!,upsert_entityrelation!,
@@ -1038,7 +1038,6 @@ function __init__()
         # ignore dotenv/load errors
     end
 
-    global ODBC_DRIVER_PATH = _resolve_odbc_driver_path(get(ENV, "ODBC_DRIVER_PATH", DEFAULT_ODBC_DRIVER_PATH))
     return nothing
 end
 

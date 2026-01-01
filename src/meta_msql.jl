@@ -2,10 +2,167 @@
 #region MSSQL Connection
 
 """
+    find_system_odbc_driver(driver_name::AbstractString) -> Union{String,Nothing}
+
+Search system ODBC configuration files for the specified driver and return its path.
+Checks /etc/odbcinst.ini on Linux and /opt/homebrew/etc/odbcinst.ini on macOS.
+"""
+function find_system_odbc_driver(driver_name::AbstractString)::Union{String,Nothing}
+    config_paths = if Sys.islinux()
+        ["/etc/odbcinst.ini"]
+    elseif Sys.isapple()
+        ["/opt/homebrew/etc/odbcinst.ini", "/usr/local/etc/odbcinst.ini", "/etc/odbcinst.ini"]
+    else
+        String[]
+    end
+    
+    for config_path in config_paths
+        if !isfile(config_path)
+            continue
+        end
+        
+        try
+            content = read(config_path, String)
+            lines = split(content, '\n')
+            
+            # Find the driver section
+            in_section = false
+            for line in lines
+                line = strip(line)
+                
+                # Check if we're entering the driver section
+                if startswith(line, '[') && endswith(line, ']')
+                    section_name = strip(line[2:end-1])
+                    in_section = (section_name == driver_name)
+                    continue
+                end
+                
+                # If in the correct section, look for Driver= line
+                if in_section && startswith(line, "Driver")
+                    parts = split(line, '=', limit=2)
+                    if length(parts) == 2
+                        driver_path = strip(parts[2])
+                        if isfile(driver_path)
+                            return driver_path
+                        end
+                    end
+                end
+            end
+        catch e
+            @debug "Failed to read $config_path" exception=e
+        end
+    end
+    
+    return nothing
+end
+
+"""
+    find_mssql_driver_in_directory() -> Union{String,Nothing}
+
+Scan common installation directories for Microsoft ODBC Driver libraries.
+Returns the path to the first valid driver found, or nothing if none found.
+"""
+function find_mssql_driver_in_directory()::Union{String,Nothing}
+    search_dirs = if Sys.islinux()
+        [
+            "/opt/microsoft/msodbcsql18/lib64",
+            "/opt/microsoft/msodbcsql17/lib64",
+            "/opt/microsoft/msodbcsql/lib64",
+        ]
+    elseif Sys.isapple()
+        [
+            "/opt/homebrew/lib",
+            "/usr/local/lib",
+        ]
+    else
+        String[]
+    end
+    
+    driver_pattern = if Sys.islinux()
+        r"libmsodbcsql-\d+\.\d+\.so"
+    elseif Sys.isapple()
+        r"libmsodbcsql\.\d+\.dylib"
+    else
+        r""
+    end
+    
+    for dir in search_dirs
+        if !isdir(dir)
+            continue
+        end
+        
+        try
+            files = readdir(dir, join=true)
+            # Filter for driver libraries and sort by version (newest first)
+            driver_files = filter(f -> isfile(f) && occursin(driver_pattern, basename(f)), files)
+            sort!(driver_files, rev=true)  # Newest version first
+            
+            if !isempty(driver_files)
+                return first(driver_files)
+            end
+        catch e
+            @debug "Failed to scan directory $dir" exception=e
+        end
+    end
+    
+    return nothing
+end
+
+"""
+    ensure_mssql_driver_registered(driver_name::AbstractString="ODBC Driver 18 for SQL Server")
+
+Ensure the MSSQL ODBC driver is registered with ODBC.jl. On Linux/macOS systems,
+this checks if the driver is registered and attempts to register it from system
+locations if not found.
+
+The function searches for drivers in the following order:
+1. Already registered with ODBC.jl
+2. System ODBC configuration files (/etc/odbcinst.ini)
+3. Common installation directories
+
+Returns `true` if driver is available, `false` otherwise.
+"""
+function ensure_mssql_driver_registered(driver_name::AbstractString="ODBC Driver 18 for SQL Server")::Bool
+    # Check if driver already registered
+    drivers = ODBC.drivers()
+    if haskey(drivers, driver_name)
+        return true
+    end
+    
+    # Windows uses system driver manager, no registration needed
+    if Sys.iswindows()
+        return true
+    end
+    
+    # Try to find driver path from system configuration
+    driver_path = find_system_odbc_driver(driver_name)
+    
+    # If not in system config, search installation directories
+    if isnothing(driver_path)
+        driver_path = find_mssql_driver_in_directory()
+    end
+    
+    # Register the driver if found
+    if !isnothing(driver_path)
+        try
+            ODBC.adddriver(driver_name, driver_path)
+            @info "Registered MSSQL ODBC driver: $driver_name at $driver_path"
+            return true
+        catch e
+            @error "Failed to register driver from $driver_path" exception=e
+            return false
+        end
+    end
+    
+    @warn "MSSQL ODBC driver '$driver_name' not found. Install Microsoft ODBC Driver for SQL Server."
+    return false
+end
+
+"""
     connect_mssql(server::AbstractString, database::AbstractString,
                   user::AbstractString, password::AbstractString;
-                  driver_path::AbstractString=ODBC_DRIVER_PATH,
-                  encrypt::Bool=true, trust_server_cert::Bool=true) -> ODBC.Connection
+                  driver::AbstractString="ODBC Driver 18 for SQL Server",
+                  encrypt::Bool=true, trust_server_cert::Bool=true) -> Union{ODBC.Connection,Nothing}
 
 Create a connection to a Microsoft SQL Server database using ODBC.
 
@@ -14,16 +171,16 @@ Create a connection to a Microsoft SQL Server database using ODBC.
 - `database`: The database name to connect to
 - `user`: The username for authentication
 - `password`: The password for authentication
-- `driver_path`: Path to the ODBC driver library (default: ODBC_DRIVER_PATH)
+- `driver`: ODBC driver name (default: "ODBC Driver 18 for SQL Server")
 - `encrypt`: Whether to use encrypted connection (default: true)
 - `trust_server_cert`: Whether to trust the server certificate (default: true)
 
 # Returns
-An `ODBC.Connection` object.
+An `ODBC.Connection` object, or `nothing` if connection fails.
 
-# Throws
-- `ArgumentError` if the ODBC driver is not found at the specified path
-- ODBC errors if connection fails
+# Note
+This function automatically registers the MSSQL ODBC driver with ODBC.jl if not already
+registered, searching common system installation paths.
 
 # Example
 ```julia
@@ -38,25 +195,31 @@ end
 """
 function connect_mssql(server::AbstractString, database::AbstractString,
     user::AbstractString, password::AbstractString;
-    driver_path::AbstractString=ODBC_DRIVER_PATH,
-    encrypt::Bool=true, trust_server_cert::Bool=true)::ODBC.Connection
+    driver::AbstractString="ODBC Driver 18 for SQL Server",
+    encrypt::Bool=true, trust_server_cert::Bool=true)::Union{ODBC.Connection,Nothing}
     try
-        if Sys.isapple()
-            ODBC.setunixODBC(; ODBCSYSINI="/opt/homebrew/etc", ODBCINSTINI="odbcinst.ini", ODBCINI="odbc.ini")
+        # Ensure driver is registered
+        if !ensure_mssql_driver_registered(driver)
+            @error "MSSQL ODBC driver not available: $driver"
+            return nothing
         end
+        
+        # On macOS, Microsoft ODBC driver requires unixODBC
+        if Sys.isapple()
+            ODBC.setunixODBC()
+        end
+        
         connStr = ""
         if Sys.iswindows()
-            connStr = "Driver=ODBC Driver 18 for SQL Server; SERVER=$(server); DATABASE=$database;Trusted_Connection=yes;TrustServerCertificate=$(trust_server_cert ? "yes" : "no");AutoTranslate=no"
-        elseif Sys.islinux()
-            connStr = "Driver={$driver_path};Server=$(server);Database=$database;UID=$(user);PWD=$(password);TrustServerCertificate=$(trust_server_cert ? "yes" : "no");AutoTranslate=no;"
-        elseif Sys.isapple()
-            connStr = "Driver={/usr/local/lib/libmsodbcsql.18.dylib};Server=$(server);Database=$database;UID=$(user);PWD=$(password);TrustServerCertificate=$(trust_server_cert ? "yes" : "no");AutoTranslate=no;"
+            connStr = "Driver={$driver};SERVER=$(server);DATABASE=$database;Trusted_Connection=yes;TrustServerCertificate=$(trust_server_cert ? "yes" : "no");AutoTranslate=no"
+        elseif Sys.islinux() || Sys.isapple()
+            connStr = "Driver={$driver};Server=$(server);Database=$database;UID=$(user);PWD=$(password);TrustServerCertificate=$(trust_server_cert ? "yes" : "no");AutoTranslate=no;"
         else
             error("Unsupported OS for MSSQL connection")
         end
         return ODBC.Connection(connStr)
     catch err
-        @error "Failed to connect to SQL Server $(ENV["SQLServer"]), database $database" exception = err
+        @error "Failed to connect to SQL Server $server, database $database" exception = err
         return nothing
     end
 end

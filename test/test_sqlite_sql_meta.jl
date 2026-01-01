@@ -4,6 +4,7 @@ using SQLite
 using DBInterface
 using DataFrames
 
+const TEST_DIR = dirname(@__FILE__)
 const SQLITE_ENV_SQL = joinpath(TEST_DIR, "sqlite_testenv.sql")
 const SQLITE_TEST_DB = joinpath(TEST_DIR, "sqlite_test.db")
 

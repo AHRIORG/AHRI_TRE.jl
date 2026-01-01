@@ -9,6 +9,7 @@ using SQLite
 using LibPQ
 using ODBC
 
+const TEST_DIR = dirname(@__FILE__)
 const DUCKDB_ENV_SQL = joinpath(TEST_DIR, "duckdb_testenv.sql")
 const SQLITE_ENV_SQL = joinpath(TEST_DIR, "sqlite_testenv.sql")
 const POSTGRES_ENV_SQL = joinpath(TEST_DIR, "postgres_test.sql")
@@ -55,7 +56,7 @@ function open_tre_store()
     try
         return AHRI_TRE.opendatastore(store), String[]
     catch e
-        @warn "Unable to open TRE datastore" exception=(e, catch_backtrace())
+        @warn "Unable to open TRE datastore" exception = (e, catch_backtrace())
         return nothing, ["TRE datastore connection failed"]
     end
 end
@@ -116,7 +117,7 @@ end
 function normalize_int_column(col)
     if eltype(col) <: Integer
         return Int.(col)
-    elseif eltype(col) <: Union{Integer, Missing}
+    elseif eltype(col) <: Union{Integer,Missing}
         return [Int(ensure_not_missing(v)) for v in col]
     else
         return [parse(Int, string(v)) for v in col]
@@ -132,20 +133,26 @@ function assert_dataset_state(store::AHRI_TRE.DataStore, dataset::AHRI_TRE.DataS
     @test actual == expected
 
     version_id = dataset.version.version_id
-    stmt_version = DBInterface.prepare(store.store, raw"""
-        SELECT version_id
-          FROM asset_versions
-         WHERE version_id = $1
-    """)
+    stmt_version = DBInterface.prepare(
+        store.store,
+        raw"""
+    SELECT version_id
+      FROM asset_versions
+     WHERE version_id = $1
+"""
+    )
     df_version = DBInterface.execute(stmt_version, (version_id,)) |> DataFrame
     @test nrow(df_version) == 1
 
-    stmt_transformation = DBInterface.prepare(store.store, raw"""
-        SELECT t.transformation_type
-          FROM transformations t
-          JOIN transformation_outputs o ON t.transformation_id = o.transformation_id
-         WHERE o.version_id = $1
-    """)
+    stmt_transformation = DBInterface.prepare(
+        store.store,
+        raw"""
+    SELECT t.transformation_type
+      FROM transformations t
+      JOIN transformation_outputs o ON t.transformation_id = o.transformation_id
+     WHERE o.version_id = $1
+"""
+    )
     df_transformation = DBInterface.execute(stmt_transformation, (version_id,)) |> DataFrame
     @test nrow(df_transformation) == 1
     @test df_transformation[1, :transformation_type] == "ingest"
@@ -268,9 +275,6 @@ function setup_mssql_source()
     if !isempty(missing)
         return nothing, "Missing MSSQL env vars: $(join(missing, ", "))"
     end
-    if !isfile(AHRI_TRE.ODBC_DRIVER_PATH)
-        return nothing, "MSSQL ODBC driver not found"
-    end
     conn = AHRI_TRE.connect_mssql(values["MSQLServer"], values["MSQLServerDB"], values["MSQLServerUser"], values["MSQLServerPW"])
     if isnothing(conn)
         return nothing, "Unable to connect to MSSQL"
@@ -283,59 +287,45 @@ function setup_mssql_source()
 end
 
 function check_mssql_tables_exist(conn)
-    df = DBInterface.execute(conn, """
-        SELECT COUNT(*) as cnt
-        FROM INFORMATION_SCHEMA.TABLES
-        WHERE TABLE_NAME IN ('causes','deaths','sites','sources')
-    """) |> DataFrame
+    df = DBInterface.execute(
+        conn,
+        """
+    SELECT COUNT(*) as cnt
+    FROM INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_NAME IN ('causes','deaths','sites','sources')
+"""
+    ) |> DataFrame
     return df[1, :cnt] == 4
 end
 
 @testset "sql_to_dataset" begin
     store, missing = open_tre_store()
-    if isnothing(store)
-        @test_skip "TRE datastore not configured: $(join(missing, ", "))"
-        return
-    end
-    if isnothing(store.lake)
-        closedatastore(store)
-        @test_skip "DuckDB lake connection not available"
-        return
-    end
     study, domain = ensure_test_study_and_domain!(store)
 
     try
         @testset "DuckDB source" begin
             handles, err = setup_duckdb_source()
-            if handles === nothing
-                @test_skip err
-            else
-                try
-                    @info "Running DuckDB sql_to_dataset test"
-                    ingest_and_validate(store, study, domain, handles.conn, "DUCKDB", "DuckDB cause counts")
-                finally
-                    DBInterface.close!(handles.conn)
-                    DuckDB.close(handles.db)
-                end
+            try
+                @info "Running DuckDB sql_to_dataset test"
+                ingest_and_validate(store, study, domain, handles.conn, "DUCKDB", "DuckDB cause counts")
+            finally
+                DBInterface.close!(handles.conn)
+                DuckDB.close(handles.db)
             end
         end
 
         @testset "SQLite source" begin
             db, err = setup_sqlite_source()
-            if db === nothing
-                @test_skip err
-            else
+            try
+                @info "Running SQLite sql_to_dataset test"
+                ingest_and_validate(store, study, domain, db, "SQLITE", "SQLite cause counts")
+            finally
                 try
-                    @info "Running SQLite sql_to_dataset test"
-                    ingest_and_validate(store, study, domain, db, "SQLITE", "SQLite cause counts")
-                finally
+                    DBInterface.close!(db)
+                catch
                     try
-                        DBInterface.close!(db)
+                        SQLite.close(db)
                     catch
-                        try
-                            SQLite.close(db)
-                        catch
-                        end
                     end
                 end
             end
@@ -343,31 +333,26 @@ end
 
         @testset "PostgreSQL source" begin
             handles, err = setup_postgres_source()
-            if handles === nothing
-                @test_skip err
-            else
-                try
-                    @info "Running PostgreSQL sql_to_dataset test"
-                    ingest_and_validate(store, study, domain, handles.conn, "POSTGRESQL", "PostgreSQL cause counts")
-                finally
-                    teardown_postgres_source(handles)
-                end
+            try
+                @info "Running PostgreSQL sql_to_dataset test"
+                ingest_and_validate(store, study, domain, handles.conn, "POSTGRESQL", "PostgreSQL cause counts")
+            finally
+                teardown_postgres_source(handles)
             end
         end
 
+        conn, err = setup_mssql_source()
+        if isnothing(conn)
+            @test false && "MSSQL source setup failed: $err"
+        end
         @testset "MSSQL source" begin
-            conn, err = setup_mssql_source()
-            if conn === nothing
-                @test_skip err
-            else
+            try
+                @info "Running MSSQL sql_to_dataset test"
+                ingest_and_validate(store, study, domain, conn, "MSSQL", "MSSQL cause counts")
+            finally
                 try
-                    @info "Running MSSQL sql_to_dataset test"
-                    ingest_and_validate(store, study, domain, conn, "MSSQL", "MSSQL cause counts")
-                finally
-                    try
-                        DBInterface.close!(conn)
-                    catch
-                    end
+                    DBInterface.close!(conn)
+                catch
                 end
             end
         end

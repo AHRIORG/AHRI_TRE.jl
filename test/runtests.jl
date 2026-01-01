@@ -16,7 +16,7 @@ end
 
 using AHRI_TRE
 
-@testset "AHRI_TRE.jl" begin
+@testset verbose = true "AHRI_TRE.jl" begin
     # Include MSSQL connection tests
     include("test_mssql_connection.jl")
     
