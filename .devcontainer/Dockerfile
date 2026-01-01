@@ -53,4 +53,15 @@ ENV JULIA_PROJECT=/workspace
 # Copy only Project.toml to allow fresh dependency resolution
 COPY Project.toml ./
 
+# Install Revise into the default global Julia environment and auto-load it for REPL sessions
+RUN julia -e 'import Pkg; env = "@v$(VERSION.major).$(VERSION.minor)"; Pkg.activate(env); Pkg.add("Revise"); Pkg.precompile()'
+
+RUN mkdir -p /root/.julia/config && \
+    printf '%s\n' \
+    'try' \
+    '    @eval using Revise' \
+    'catch err' \
+    'end' \
+    > /root/.julia/config/startup.jl
+
 CMD ["julia"]
