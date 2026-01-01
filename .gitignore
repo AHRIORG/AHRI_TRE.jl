@@ -9,3 +9,4 @@ test*.jl
 .DS_Store
 .vscode/
 /logs
+*.db

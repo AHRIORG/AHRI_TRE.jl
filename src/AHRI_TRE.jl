@@ -27,7 +27,7 @@ using ODBC
 
 export
     DataStore, Version, Vocabulary, VocabularyItem, AbstractStudy, Study, Domain, Entity, EntityRelation,
-    AbstractAsset, Asset, AbstractAssetVersion, AssetVersion, DataFile, Transformation, DatabaseFlavour,
+    AbstractAsset, Asset, AbstractAssetVersion, AssetVersion, DataSet, DataFile, Transformation, DatabaseFlavour,
     opendatastore, closedatastore,
     get_domain, add_domain!, update_domain, get_domains,
     get_study, get_studies, add_study!, add_study_domain!, get_study_domains,
