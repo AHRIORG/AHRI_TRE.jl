@@ -446,7 +446,7 @@ function createtransformations(conn::DBInterface.Connection)
         description TEXT NOT NULL,
         repository_url TEXT NULL,
         commit_hash VARCHAR(40) NULL,
-        file_path TEXT NOT NULL,
+        file_path TEXT NULL,
         date_created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         created_by VARCHAR(255) DEFAULT CURRENT_USER
     );
@@ -2128,9 +2128,9 @@ function create_transformation(transformation_type::String, description::String;
         transformation_id=nothing,
         transformation_type=transformation_type,
         description=description,
-        repository_url=repository_url,
-        commit_hash=commit_hash,
-        file_path=file_path
+        repository_url=ismissing(repository_url) ? nothing : repository_url,
+        commit_hash=ismissing(commit_hash) ? nothing : commit_hash,
+        file_path=ismissing(file_path) ? nothing : file_path
     )
 end
 """

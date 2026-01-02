@@ -37,7 +37,7 @@ try
     # First create or retrieve a domain that the study can use for its data
     domain = get_domain(datastore, "APCC")
     if isnothing(domain)
-        @info "Domain '$(domain.name)' not found, creating new domain."
+        @info "Domain 'APCC' not found, creating new domain."
         domain = Domain(
             name="APCC",
             uri="https://apcc.africa",
@@ -49,7 +49,7 @@ try
     # Now create a study, or retrieve the study the REDCap project should be associated with
     study = get_study(datastore, "APCC")
     if isnothing(study)
-        @info "Study '$(study.name)' not found, creating new study."
+        @info "Study 'APCC' not found, creating new study."
         study = Study(
             name="APCC",
             description="Update APCC cohort data and contact information",

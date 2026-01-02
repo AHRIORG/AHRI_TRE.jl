@@ -186,7 +186,7 @@ Base.@kwdef mutable struct Transformation
     description::String
     repository_url::Union{String,Nothing} = nothing
     commit_hash::Union{String,Nothing} = nothing
-    file_path::String # Path to the script or notebook in the repository
+    file_path::Union{String,Nothing} = nothing # Path to the script or notebook in the repository
     inputs::Vector{AssetVersion} = AssetVersion[] # Input asset versions
     outputs::Vector{AssetVersion} = AssetVersion[] # Output asset versions
 end
