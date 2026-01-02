@@ -113,20 +113,46 @@ _normalize_remote(url::AbstractString) = begin
 end
 
 """
-    git_commit_info(dir::AbstractString = @__DIR__; short::Bool = true, script_path::AbstractString = @__FILE__)
+    git_commit_info(dir::AbstractString=pwd(); short::Bool=true, script_path=nothing)
 
 Return version control information about the currently executing script for use in transformations.
-- `dir`: The directory to search for the git repository (default is the directory of the current script).
+- `dir`: The directory to search for the git repository (default is the current working directory).
 - `short`: Whether to return a short commit hash (default is true, returns first 7 characters of the hash).
-- `script_path`: The path to the script being executed (default is the current script file).
+- `script_path`: Optional path to the calling script. If `nothing`, the function tries `PROGRAM_FILE` (when
+    running a script) and falls back to the first non-package file found in the current stacktrace.
 Returns a tuple with:
-- `repo_url`: The URL of the git repository (or `nothing` if not found).
-- `commit`: The commit hash (or `nothing` if not found).
-- `script_relpath`: The relative path of the script from the repository root (or `nothing` if not found).
+- `repo_url`: The URL of the git repository (or `missing` if not found).
+- `commit`: The commit hash (or `missing` if not found).
+- `script_relpath`: The relative path of the script from the repository root (or `missing` if not found).
 This function normalizes SSH remotes to HTTPS format.
-If the script is not in a git repository, it returns `nothing` for all fields.
+If the script is not in a git repository, it returns `missing` for all fields.
 """
-function git_commit_info(dir::AbstractString=@__DIR__; short::Bool=true, script_path::AbstractString=@__FILE__)
+function git_commit_info(dir::AbstractString=pwd(); short::Bool=true, script_path=nothing)
+
+    this_file = @__FILE__
+
+    # Resolve the *calling* script path. Using @__FILE__ as a default here would capture this library file.
+    resolved_script_path = try
+        if script_path !== nothing
+            String(script_path)
+        elseif !isempty(String(Base.PROGRAM_FILE))
+            String(Base.PROGRAM_FILE)
+        else
+            package_root = normpath(joinpath(@__DIR__, ".."))
+            caller = nothing
+            for fr in stacktrace()
+                fr.file === nothing && continue
+                f = String(fr.file)
+                f == this_file && continue
+                startswith(f, package_root) && continue
+                caller = f
+                break
+            end
+            caller === nothing ? this_file : caller
+        end
+    catch
+        this_file
+    end
 
     # Discover repo root via `git`
     root = try
@@ -153,7 +179,13 @@ function git_commit_info(dir::AbstractString=@__DIR__; short::Bool=true, script_
     @info "Repository URL: $(repo_url === missing ? "not found" : repo_url)"
     # Script relpath (relative to repo root)
     script_relpath = try
-        relpath(abspath(script_path), root)
+        abs_script = abspath(resolved_script_path)
+        abs_root = abspath(root)
+        if abs_script == abs_root || startswith(abs_script, abs_root * "/")
+            relpath(abs_script, abs_root)
+        else
+            missing
+        end
     catch
         missing
     end
