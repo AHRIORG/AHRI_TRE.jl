@@ -32,7 +32,7 @@ export
     get_domain, add_domain!, update_domain, get_domains,
     get_study, get_studies, add_study!, add_study_domain!, get_study_domains,
     get_entity, create_entity!, get_entityrelation, create_entity_relation!, list_domainentities, list_domainrelations, get_domainentities, get_domainrelations,
-    get_variable, add_variable!, get_domain_variables, get_dataset_variables, get_study_variables,
+    get_variable, add_variable!, get_domain_variables, get_dataset_variables, get_study_variables,update_variable!,
     create_asset, get_asset, get_study_assets,
     ingest_file, ingest_file_version, get_datafile_metadata, get_study_datafiles,
     ingest_redcap_project, transform_eav_to_dataset,

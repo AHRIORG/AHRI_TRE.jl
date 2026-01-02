@@ -1187,32 +1187,32 @@ This function returns the newly created Domain object with the domain_id set.
 """
 function add_domain!(store::DataStore, domain::Domain)::Domain
     db = store.store
-        uri = ismissing(domain.uri) ? nothing : domain.uri
-        description = ismissing(domain.description) ? missing : domain.description
+    uri = ismissing(domain.uri) ? nothing : domain.uri
+    description = ismissing(domain.description) ? missing : domain.description
 
-        # 1) Does a matching domain already exist?
-        # Avoid NULL parameter comparison edge-cases by branching on uri.
-        if uri === nothing
-                sql_get = raw"""
-                        SELECT domain_id
-                            FROM domains
-                         WHERE name = $1
-                             AND uri IS NULL
-                         LIMIT 1;
-                """
-                stmt_get = DBInterface.prepare(db, sql_get)
-                df = DBInterface.execute(stmt_get, (domain.name,)) |> DataFrame
-        else
-                sql_get = raw"""
-                        SELECT domain_id
-                            FROM domains
-                         WHERE name = $1
-                             AND uri = $2
-                         LIMIT 1;
-                """
-                stmt_get = DBInterface.prepare(db, sql_get)
-                df = DBInterface.execute(stmt_get, (domain.name, uri)) |> DataFrame
-        end
+    # 1) Does a matching domain already exist?
+    # Avoid NULL parameter comparison edge-cases by branching on uri.
+    if uri === nothing
+        sql_get = raw"""
+                SELECT domain_id
+                    FROM domains
+                 WHERE name = $1
+                     AND uri IS NULL
+                 LIMIT 1;
+        """
+        stmt_get = DBInterface.prepare(db, sql_get)
+        df = DBInterface.execute(stmt_get, (domain.name,)) |> DataFrame
+    else
+        sql_get = raw"""
+                SELECT domain_id
+                    FROM domains
+                 WHERE name = $1
+                     AND uri = $2
+                 LIMIT 1;
+        """
+        stmt_get = DBInterface.prepare(db, sql_get)
+        df = DBInterface.execute(stmt_get, (domain.name, uri)) |> DataFrame
+    end
 
     if nrow(df) > 0
         error("Domain with name '$(domain.name)' and URI '$(domain.uri)' already exists with domain_id=$(df[1, :domain_id])")
@@ -2319,6 +2319,14 @@ function upsert_variable!(datastore::DataStore, domain_id::Int, name::String; va
     df = DBInterface.execute(stmt, (domain_id, name, value_type_id, value_format, vocabulary_id, description, note, keyrole, ontology_namespace, ontology_class)) |> DataFrame
     return df[1, :variable_id]
 end
+"""
+    add_variable!(datastore::DataStore, variable::Variable)::Variable
+
+Add a Variable to the TRE datastore, upserting if it already exists.
+- 'datastore' is the DataStore object containing the database connection.
+- 'variable' is the Variable object to add.
+This function will upsert the variable into the database and set its variable_id.
+"""
 function add_variable!(datastore::DataStore, variable::Variable)::Variable
     variable.variable_id = upsert_variable!(datastore, variable.domain_id, variable.name;
         value_type_id=variable.value_type_id,
@@ -2332,6 +2340,36 @@ function add_variable!(datastore::DataStore, variable::Variable)::Variable
     if !ismissing(variable.vocabulary)
         variable.vocabulary_id = ensure_vocabulary!(datastore, variable.vocabulary)
     end
+    return variable
+end
+function update_variable!(datastore::DataStore, variable::Variable)::Variable
+    if isnothing(variable.variable_id)
+        error("Variable must have a variable_id to update")
+    end
+    stmt = DBInterface.prepare(
+        datastore.store,
+        raw"""
+            UPDATE variables
+            SET domain_id = $1,
+                name = $2,
+                value_type_id = $3,
+                value_format = $4,
+                vocabulary_id = $5,
+                description = $6,
+                note = $7,
+                keyrole = $8,
+                ontology_namespace = $9,
+                ontology_class = $10
+            WHERE variable_id = $11;
+        """
+    )
+    DBInterface.execute(stmt, (variable.domain_id, variable.name, variable.value_type_id, variable.value_format,
+        variable.vocabulary_id, variable.description, variable.note, variable.keyrole,
+        variable.ontology_namespace, variable.ontology_class, variable.variable_id))
+    if !ismissing(variable.vocabulary)
+        variable.vocabulary_id = ensure_vocabulary!(datastore, variable.vocabulary)
+    end
+
     return variable
 end
 """
