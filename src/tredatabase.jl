@@ -2365,16 +2365,19 @@ function get_study_variables_df(store::DataStore, study::Study; domain::Union{Do
     db = store.store
     if isnothing(domain)
         domains = get_study_domains(store, study)
-        domain_ids = join(string.(getfield.(domains, :domain_id)), ",")
-        if isempty(domain_ids)
-            domain_ids = "-1"  # No domains, so no variables
+        if isempty(domains)
+            # No domains, so no variables
+            return DataFrame()
         end
-        sql = raw"""
+        domain_ids = getfield.(domains, :domain_id)
+        # Build SQL with proper parameterized query for array
+        placeholders = join(["(\$$i)" for i in 1:length(domain_ids)], ",")
+        sql = """
             SELECT * FROM variables
-            WHERE domain_id IN ($1);
+            WHERE domain_id IN ($placeholders);
         """
         stmt = DBInterface.prepare(db, sql)
-        df = DBInterface.execute(stmt, (domain_ids,)) |> DataFrame
+        df = DBInterface.execute(stmt, Tuple(domain_ids)) |> DataFrame
         return df
     end
 

@@ -32,9 +32,17 @@ datastore = AHRI_TRE.DataStore(
 @info "Execution started at: ", Dates.now()
 datastore = AHRI_TRE.opendatastore(datastore)
 try
+  domains = AHRI_TRE.get_domains(datastore)
+  println()
+  println("Domains available in the TRE:")
+  for domain in domains
+    println("$(domain.name) (ID: $(domain.domain_id))")
+  end
   studies = AHRI_TRE.get_studies(datastore)
+  println()
   println("Studies available in the TRE:")
   for study in studies
+    println()
     println("$(study.name) (ID: $(study.study_id))")
     datasets = AHRI_TRE.get_study_datasets(datastore, study)
     println("Datasets in '$(study.name)' study:")
