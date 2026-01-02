@@ -654,13 +654,13 @@ Transform the result of an SQL query into a DataSet stored in the TRE DataStore.
 # Returns
 The created DataSet object, or `nothing` on failure.
 """
-function sql_to_dataset(store::DataStore, study::Study, domain::Domain, dataset_name::String, conn, db_flavour::AbstractString, sql::String;
+function sql_to_dataset(store::DataStore, study::Study, domain::Domain, dataset_name::String, conn::DBInterface.Connection, db_flavour::AbstractString, sql::String;
     description::String, replace::Bool=false, new_version::Union{VersionNumber,Nothing}=nothing)::DataSet
     return sql_to_dataset(store, study, domain, dataset_name, conn, parse_flavour(db_flavour), sql;
         description=description, replace=replace, new_version=new_version)
 end
 
-function sql_to_dataset(store::DataStore, study::Study, domain::Domain, dataset_name::String, conn, db_flavour::DatabaseFlavour, sql::String;
+function sql_to_dataset(store::DataStore, study::Study, domain::Domain, dataset_name::String, conn::DBInterface.Connection, db_flavour::DatabaseFlavour, sql::String;
     description::String, replace::Bool=false, new_version::Union{VersionNumber,Nothing}=nothing)::DataSet
     @info "Saving sql query to datastore"
     if isnothing(store)
