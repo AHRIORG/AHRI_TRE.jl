@@ -97,6 +97,20 @@ function file_uri_to_path(uri::AbstractString)::String
         return decoded_path
     end
 end
+"""
+    _normalize_remote(url::AbstractString)
+
+Normalize a git remote URL by converting SSH format to HTTPS format.
+"""
+_normalize_remote(url::AbstractString) = begin
+    s = String(url)
+    if startswith(s, "git@")
+        if (m = match(r"^git@([^:]+):(.+?)(?:\.git)?$", s)) !== nothing
+            return "https://$(m.captures[1])/$(m.captures[2])"
+        end
+    end
+    replace(s, r"\.git$" => "")
+end
 
 """
     git_commit_info(dir::AbstractString = @__DIR__; short::Bool = true, script_path::AbstractString = @__FILE__)
@@ -113,16 +127,6 @@ This function normalizes SSH remotes to HTTPS format.
 If the script is not in a git repository, it returns `nothing` for all fields.
 """
 function git_commit_info(dir::AbstractString=@__DIR__; short::Bool=true, script_path::AbstractString=@__FILE__)
-    # normalize ssh remotes to https
-    _normalize_remote(url::AbstractString) = begin
-        s = String(url)
-        if startswith(s, "git@")
-            if (m = match(r"^git@([^:]+):(.+?)(?:\.git)?$", s)) !== nothing
-                return "https://$(m.captures[1])/$(m.captures[2])"
-            end
-        end
-        replace(s, r"\.git$" => "")
-    end
 
     # Discover repo root via `git`
     root = try
@@ -130,7 +134,7 @@ function git_commit_info(dir::AbstractString=@__DIR__; short::Bool=true, script_
     catch
         return (repo_url=missing, commit=missing, script_relpath=missing)
     end
-
+    @info "Git repository root detected at: $root" 
     # Current commit hash
     commit = try
         h = readchomp(`$(Git.git()) -C $(root) rev-parse HEAD`)
@@ -138,7 +142,7 @@ function git_commit_info(dir::AbstractString=@__DIR__; short::Bool=true, script_
     catch
         missing
     end
-
+    @info "Current commit hash: $(commit === missing ? "not found" : commit)"
     # Remote URL (origin)
     repo_url = try
         u = readchomp(`$(Git.git()) -C $(root) config --get remote.origin.url`)
@@ -146,13 +150,14 @@ function git_commit_info(dir::AbstractString=@__DIR__; short::Bool=true, script_
     catch
         missing
     end
-
+    @info "Repository URL: $(repo_url === missing ? "not found" : repo_url)"
     # Script relpath (relative to repo root)
     script_relpath = try
         relpath(abspath(script_path), root)
     catch
         missing
     end
+    @info "Script relative path in repo: $(script_relpath === missing ? "not found" : script_relpath)"
     return (repo_url=repo_url, commit=commit, script_relpath=script_relpath)
 end
 """
