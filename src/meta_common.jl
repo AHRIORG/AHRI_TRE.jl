@@ -696,15 +696,9 @@ function sql_to_dataset(store::DataStore, study::Study, domain::Domain, dataset_
         # Execute the SQL and save data in the this dataset in the datasore (using the ducklake)
         load_query(store, dataset, conn, sql)
         @info "Loaded data into dataset $(dataset.version.asset.name) version $(dataset.version.version_id)"
-        #Create a transformation to record this ingestion. Use the caller's script
-        #location as the git root hint so we pick up the user's repo instead of the
-        #installed package directory.
-        caller_path = caller_file_runtime(1)
-        commit = if isnothing(caller_path)
-            git_commit_info()
-        else
-            git_commit_info(dirname(caller_path); script_path=caller_path)
-        end
+        # Create a transformation to record this ingestion.
+        # git_commit_info() resolves the external caller (or Base.PROGRAM_FILE / pwd()).
+        commit = git_commit_info()
         transformation = create_transformation("ingest","Ingested sql \n$sql\n to dataset $(dataset.version.asset.name) version $(dataset.version.version_id)";
             repository_url=commit.repo_url,
             commit_hash=commit.commit,

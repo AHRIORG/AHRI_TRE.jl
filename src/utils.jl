@@ -113,12 +113,12 @@ _normalize_remote(url::AbstractString) = begin
 end
 
 """
-    git_commit_info(dir::AbstractString = @__DIR__; short::Bool = true, script_path::AbstractString = @__FILE__)
+    git_commit_info(dir::Union{AbstractString,Nothing}=nothing; short::Bool=true, script_path::Union{AbstractString,Nothing}=nothing)
 
 Return version control information about the currently executing script for use in transformations.
-- `dir`: The directory to search for the git repository (default is the directory of the current script).
+- `dir`: Directory to search for the git repository. If `nothing`, it is derived from `script_path` when available, otherwise `pwd()`.
 - `short`: Whether to return a short commit hash (default is true, returns first 7 characters of the hash).
-- `script_path`: The path to the script being executed (default is the current script file).
+- `script_path`: The path to the script being executed. If `nothing`, it is resolved at runtime from the caller (or `Base.PROGRAM_FILE` when available).
 Returns a tuple with:
 - `repo_url`: The URL of the git repository (or `nothing` if not found).
 - `commit`: The commit hash (or `nothing` if not found).
@@ -126,18 +126,58 @@ Returns a tuple with:
 This function normalizes SSH remotes to HTTPS format.
 If the script is not in a git repository, it returns `nothing` for all fields.
 """
-function git_commit_info(dir::AbstractString=@__DIR__; short::Bool=true, script_path::AbstractString=@__FILE__)
+function git_commit_info(dir::Union{AbstractString,Nothing}=nothing; short::Bool=true, script_path::Union{AbstractString,Nothing}=nothing)
 
-    # Discover repo root via `git`
+    # Package source dir (used only to avoid mistaking AHRI_TRE internals for the caller's script).
+    # NOTE: @__DIR__ here is the package's src dir when installed; that's exactly what we want to detect.
+    package_src_dir = abspath(@__DIR__)
+
+    # Resolve script_path at runtime.
+    # - Avoid @__FILE__ defaults: inside a package that points to the package source file.
+    # - Prefer the *external* caller when possible.
+    if script_path === nothing || isempty(String(script_path))
+        caller_path = caller_file_runtime(2)
+        if caller_path !== nothing && !isempty(String(caller_path))
+            # If the caller frame is inside the package source tree, it's not the user's script.
+            if startswith(abspath(String(caller_path)), package_src_dir)
+                script_path = nothing
+            else
+                script_path = caller_path
+            end
+        end
+        if (script_path === nothing || isempty(String(script_path))) && !isempty(Base.PROGRAM_FILE)
+            script_path = Base.PROGRAM_FILE
+        end
+        if script_path !== nothing && isempty(String(script_path))
+            script_path = nothing
+        end
+    end
+
+    # Resolve the directory to search for the repo.
+    if dir === nothing || isempty(String(dir))
+        if script_path !== nothing && !isempty(String(script_path))
+            dir = dirname(abspath(String(script_path)))
+        else
+            dir = pwd()
+        end
+    end
+
+    # Discover repo root via `git`.
+    # If we're not in a git repository, return missing repo/commit, but keep the script path if available.
     root = try
-        readchomp(`$(Git.git()) -C $(dir) rev-parse --show-toplevel`)
+        readchomp(pipeline(`$(Git.git()) -C $(dir) rev-parse --show-toplevel`; stderr=devnull))
     catch
-        return (repo_url=missing, commit=missing, script_relpath=missing)
+        script_abs = if script_path === nothing || isempty(String(script_path))
+            missing
+        else
+            abspath(String(script_path))
+        end
+        return (repo_url=missing, commit=missing, script_relpath=script_abs)
     end
     @info "Git repository root detected at: $root" 
     # Current commit hash
     commit = try
-        h = readchomp(`$(Git.git()) -C $(root) rev-parse HEAD`)
+        h = readchomp(pipeline(`$(Git.git()) -C $(root) rev-parse HEAD`; stderr=devnull))
         short ? String(h[1:7]) : String(h)
     catch
         missing
@@ -145,7 +185,7 @@ function git_commit_info(dir::AbstractString=@__DIR__; short::Bool=true, script_
     @info "Current commit hash: $(commit === missing ? "not found" : commit)"
     # Remote URL (origin)
     repo_url = try
-        u = readchomp(`$(Git.git()) -C $(root) config --get remote.origin.url`)
+        u = readchomp(pipeline(`$(Git.git()) -C $(root) config --get remote.origin.url`; stderr=devnull))
         isempty(u) ? missing : _normalize_remote(u)
     catch
         missing
@@ -153,7 +193,11 @@ function git_commit_info(dir::AbstractString=@__DIR__; short::Bool=true, script_
     @info "Repository URL: $(repo_url === missing ? "not found" : repo_url)"
     # Script relpath (relative to repo root)
     script_relpath = try
-        relpath(abspath(script_path), root)
+        if script_path === nothing || isempty(String(script_path))
+            missing
+        else
+            relpath(abspath(String(script_path)), root)
+        end
     catch
         missing
     end

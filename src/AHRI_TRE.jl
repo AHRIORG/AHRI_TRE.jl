@@ -454,7 +454,7 @@ function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_to
             "http://edamontology.org/format_3752"; description="REDCap project $(redcap_info.project_id) EAV Export for $(redcap_info.project_title)", compress=true)
         @info "Attached data file: $(datafile.storage_uri) with digest $(datafile.digest)"
         #Create an ingest transformation to record this ingestion
-        commit = git_commit_info(; script_path=caller_file_runtime(1))
+        commit = git_commit_info()
         transformation = Transformation(
             transformation_type="ingest",
             description="Ingested REDCap project $(redcap_info.project_id) records for project: $(redcap_info.project_title) using AHRI_TRE ingest_redcap_project function",
@@ -676,7 +676,7 @@ function transform_eav_to_dataset(store::DataStore, datafile::DataFile; convert=
         dataset = create_dataset_meta(store, study, dataset_name, "Dataset from eav file $(asset.name)", datafile)
         transform_eav_to_table!(store, datafile, dataset; convert=convert)
         #Create a transformation to record this ingestion
-        commit = git_commit_info(; script_path=caller_file_runtime(1))
+        commit = git_commit_info()
         transformation = Transformation(
             transformation_type="transform",
             description="Transformed eav $(asset.name) to dataset $(dataset_name)",
@@ -988,7 +988,7 @@ function ingest_file(store::DataStore, study::Study, asset_name::String, file_pa
             datafile = attach_datafile(store, study, asset_name, dest_path, edam_format; description=description, compress=compress, encrypt=encrypt)
         end
         @info "Ingested data file for asset: $(asset_name) with version ID: $(datafile.version.version_id)"
-        commit = git_commit_info(; script_path=caller_file_runtime(1))
+        commit = git_commit_info()
         transformation = Transformation(
             transformation_type="ingest",
             description="Ingesting datafile $(file_path) to $(dest_path) in study $(study.name)",
