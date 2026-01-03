@@ -120,11 +120,11 @@ Return version control information about the currently executing script for use 
 - `short`: Whether to return a short commit hash (default is true, returns first 7 characters of the hash).
 - `script_path`: The path to the script being executed. If `nothing`, it is resolved at runtime from the caller (or `Base.PROGRAM_FILE` when available).
 Returns a tuple with:
-- `repo_url`: The URL of the git repository (or `nothing` if not found).
-- `commit`: The commit hash (or `nothing` if not found).
-- `script_relpath`: The relative path of the script from the repository root (or `nothing` if not found).
+- `repo_url`: The URL of the git repository (or `missing` if not found).
+- `commit`: The commit hash (or `missing` if not found).
+- `script_relpath`: The relative path of the script from the repository root (or `missing` if not found).
 This function normalizes SSH remotes to HTTPS format.
-If the script is not in a git repository, it returns `nothing` for all fields.
+If the script is not in a git repository, it returns `missing` for all fields.
 """
 function git_commit_info(dir::Union{AbstractString,Nothing}=nothing; short::Bool=true, script_path::Union{AbstractString,Nothing}=nothing)
 
