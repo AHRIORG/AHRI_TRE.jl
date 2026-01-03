@@ -178,12 +178,19 @@ table_name = get_datasetname(dataset, include_schema=true)
 ## Gotchas
 - Always close connections: use try-finally blocks with `closedatastore()`
 - REDCap data is EAV format - must transform to dataset before analysis
+- `transform_eav_to_dataset()` can fail and returns `Union{DataSet, Nothing}`; callers should handle `nothing` (e.g. log and abort) rather than assuming a dataset is always returned.
 - SHA256 hashes are lowercase hex strings
 - PostgreSQL role creation includes conditional existence check to avoid errors
 - DuckDB requires `LOAD ducklake` and `LOAD postgres` extensions before attaching
 - MSSQL ODBC driver automatically discovered and registered from system paths
+- `git_commit_info()` must not default to `@__DIR__` / `@__FILE__` inside the package, because those point at the installed package source (often under `.julia/...`) rather than the user's script.
+    - Current behavior: resolves an external caller script by scanning the stacktrace; falls back to `Base.PROGRAM_FILE`, then `pwd()`.
+    - If no git repo is found, it returns `repo_url`/`commit` as `missing`, but keeps `script_relpath` as the absolute script path when available.
+    - In VS Code, avoid accidentally recording the Julia extension `terminalserver.jl` as the "caller" by filtering internal/editor frames.
 - In the Asset struct asset_type is a string field ("dataset","file"), not an integer constant
 - In the datastore asset_types are represented by an enum type (dataset, file)
 - In the Transformation transformation_type is a string field ("ingest","transform", "entity", "export", "repository"), not an integer constant
 - In the datastore transformation_types are represented by an enum type (ingest, transform, entity, export, repository)
+- Julia container types are invariant: prefer `AbstractVector{<:T}` in method signatures when accepting vectors of subtype elements (e.g. vocabulary items).
+- DataFrames joins: ensure you are joining DataFrames (not vectors of structs). When joining on differently named columns, prefer renaming to a common name before `innerjoin` to avoid `makeunique` column renaming surprises.
 - In test sets never use @skip_test; instead let the test fail with an informative error message

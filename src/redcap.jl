@@ -1,17 +1,17 @@
 function retry_post(api_url, form; retry=5)::HTTP.Response
-    # @info "Posting to REDCap API $(api_url) with form: $(form)"
+    # @debug "Posting to REDCap API $(api_url) with form: $(form)"
     resp = nothing
     for attempt in 1:retry
         try
             resp = HTTP.post(api_url; headers=["Content-Type" => "application/x-www-form-urlencoded"], body=form)
-            # @info "HTTP Status: $(resp.status)"
+            # @debug "HTTP Status: $(resp.status)"
             break
         catch e
             if attempt == retry
                 error("REDCap request failed after $(retry) attempts: $(e)")
             end
-            # @info "REDCap request failed (attempt $(attempt)/$(retry)): $(e)"
-            # @info "Retrying in $(attempt) seconds..."
+            # @debug "REDCap request failed (attempt $(attempt)/$(retry)): $(e)"
+            # @debug "Retrying in $(attempt) seconds..."
             sleep(attempt)  # Incremental backoff
         end
     end
@@ -19,7 +19,7 @@ function retry_post(api_url, form; retry=5)::HTTP.Response
     return resp
 end
 function retry_streampost(api_url, headers, form, response_stream; retry=5)::HTTP.Response
-    # @info "Posting to REDCap API $(api_url) with form: $(form)"
+    # @debug "Posting to REDCap API $(api_url) with form: $(form)"
     resp = nothing
     for attempt in 1:retry
         try
@@ -29,8 +29,8 @@ function retry_streampost(api_url, headers, form, response_stream; retry=5)::HTT
             if attempt == retry
                 error("REDCap request failed after $(retry) attempts: $(e)")
             end
-            # @info "REDCap request failed (attempt $(attempt)/$(retry)): $(e)"
-            # @info "Retrying in $(attempt) seconds..."
+            # @debug "REDCap request failed (attempt $(attempt)/$(retry)): $(e)"
+            # @debug "Retrying in $(attempt) seconds..."
             sleep(attempt)  # Incremental backoff
         end
     end
@@ -47,7 +47,7 @@ Do a POST request to the REDCap API with the given body.
 Returns the HTTP response object.
 """
 function redcap_post(api_url, body::AbstractDict; retry=5)::HTTP.Response
-    # @info "Posting to REDCap API $(api_url) with body: $(body)"
+    # @debug "Posting to REDCap API $(api_url) with body: $(body)"
     form = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k, v) in body], "&")
     resp = retry_post(api_url, form; retry=retry)
     resp.status == 200 || error("REDCap post request failed $(resp.status): $(String(resp.body))")
@@ -65,7 +65,7 @@ Do a POST request to the REDCap API with the given body and save the response to
 Returns true if successful, false otherwise.
 """
 function redcap_post_tofile(api_url, body::AbstractDict, outputfile::String; decode::Bool=false, retry=5)::Bool
-    @info "Posting to download file $(outputfile) from REDCap API $(api_url)"
+    @debug "Posting to download file $(outputfile) from REDCap API $(api_url)"
     form = join(["$(HTTP.escapeuri(k))=$(HTTP.escapeuri(v))" for (k, v) in body], "&")
     headers = ["Content-Type" => "application/x-www-form-urlencoded"]  # add Accept if needed
     resp = nothing
@@ -297,7 +297,7 @@ function register_redcap_datadictionary(store::DataStore,
     end
     try
         md = redcap_metadata(redcap_url, redcap_token; forms=forms)
-        @info "REDCap metadata downloaded: $(nrow(md)) fields"
+        @debug "REDCap metadata downloaded: $(nrow(md)) fields"
         out = DataFrame(field_name=String[], variable_id=Int[], value_type_id=Int[],
             vocabulary_id=Union{Missing,Int}[], field_type=String[], 
             validation=Union{Missing,String}[], label=Union{Missing,String}[], note=Union{Missing,String}[])
@@ -445,7 +445,7 @@ function redcap_export_eav(api_url::AbstractString, api_token::AbstractString; f
     outpath = joinpath(out_dir, fname)
 
     f = isempty(fields) ? redcap_fields(api_url, api_token) : fields #remove this once the eav export bug that returns nothing when the field list is empty, is fixed
-    @info "Exporting REDCap fields: $(join(f, ", "))"
+    @debug "Exporting REDCap fields: $(join(f, ", "))"
     body = OrderedDict(
         "token" => api_token,
         "content" => "record",

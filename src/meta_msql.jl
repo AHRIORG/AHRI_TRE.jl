@@ -146,7 +146,7 @@ function ensure_mssql_driver_registered(driver_name::AbstractString="ODBC Driver
     if !isnothing(driver_path)
         try
             ODBC.adddriver(driver_name, driver_path)
-            @info "Registered MSSQL ODBC driver: $driver_name at $driver_path"
+            @debug "Registered MSSQL ODBC driver: $driver_name at $driver_path"
             return true
         catch e
             @error "Failed to register driver from $driver_path" exception=e

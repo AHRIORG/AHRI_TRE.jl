@@ -238,7 +238,7 @@ Return the `source_id` of source `name`, returns `missing` if source doesn't exi
 """
 function get_studyid(store::DataStore, name::AbstractString)::Union{UUID,Nothing}
     study_id = get_namedkey(store.store, "studies", name, :study_id)
-    @info "Study ID for $(name): $(study_id)"
+    @debug "Study ID for $(name): $(study_id)"
     if ismissing(study_id)
         return nothing
     end
@@ -445,14 +445,14 @@ function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_to
     try
         register_redcap_datadictionary(store, domain.domain_id, api_url, api_token;
             vocabulary_prefix=vocabulary_prefix, use_transaction=false)
-        @info "Registered REDCap datadictionary for study: $(study.name) in domain: $(domain.name)"
+        @debug "Registered REDCap datadictionary for study: $(study.name) in domain: $(domain.name)"
         redcap_info = redcap_project_info(api_url, api_token)
         # Download REDCap records in EAV format
         path = redcap_export_eav(api_url, api_token, forms=forms, fields=fields, decode=true, lake_root=joinpath(store.lake_data, study.name))
-        @info "Downloaded REDCap EAV export to: $path"
+        @debug "Downloaded REDCap EAV export to: $path"
         datafile = attach_datafile(store, study, "redcap_$(redcap_info.project_id)_eav", path,
             "http://edamontology.org/format_3752"; description="REDCap project $(redcap_info.project_id) EAV Export for $(redcap_info.project_title)", compress=true)
-        @info "Attached data file: $(datafile.storage_uri) with digest $(datafile.digest)"
+        @debug "Attached data file: $(datafile.storage_uri) with digest $(datafile.digest)"
         #Create an ingest transformation to record this ingestion
         commit = git_commit_info()
         transformation = Transformation(
@@ -464,7 +464,7 @@ function ingest_redcap_project(store::DataStore, api_url::AbstractString, api_to
         )
         # Save the transformation to the datastore
         add_transformation!(store, transformation)
-        @info "Created transformation with ID: $(transformation.transformation_id)"
+        @debug "Created transformation with ID: $(transformation.transformation_id)"
         # Add the data file as an output to the transformation
         add_transformation_output(store, transformation, datafile.version)
         # Commit transaction
@@ -506,7 +506,7 @@ function prepare_datafile(file_path::AbstractString, edam_format::String; compre
             end
             datafile.storage_uri = path_to_file_uri(compressed_path)
             datafile.compression_algorithm = "zstd"
-            @info "Compressed file created: $compressed_path"
+            @debug "Compressed file created: $compressed_path"
             rm(file_path; force=true)
             file_path = compressed_path
         else
@@ -544,7 +544,7 @@ function attach_datafile(store::DataStore, study::Study, asset_name::String,
     datafile.version = asset.versions[1]  # Use the base version of the asset
     # Add the datafile to the datastore
     register_datafile(store, datafile)
-    @info "Registered data file for asset: $(asset_name) with version ID: $(datafile.version.version_id)"
+    @debug "Registered data file for asset: $(asset_name) with version ID: $(datafile.version.version_id)"
     # Return the DataFile object
     return datafile
 end
@@ -569,7 +569,7 @@ function attach_datafile(store::DataStore, assetversion::AssetVersion, file_path
     datafile.version = assetversion
     # Add the datafile to the datastore
     register_datafile(store.store, datafile)
-    @info "Registered data file for asset version: $(assetversion.version_id)"
+    @debug "Registered data file for asset version: $(assetversion.version_id)"
     # Return the DataFile object
     return datafile
 end
@@ -633,9 +633,9 @@ function attach_datafile_version(store::DataStore, assetversion::AssetVersion, v
     save_version!(store, assetversion) # Save the updated version
     datafile.version = assetversion # Associate the data file with the new version
     # Register the data file in the datastore
-    @info "Registering new data file version"
+    @debug "Registering new data file version"
     register_datafile(store, datafile)
-    @info "Registered new data file version for asset version: $(assetversion.version_id)"
+    @debug "Registered new data file version for asset version: $(assetversion.version_id)"
     # Return the DataFile object
     return datafile
 end
@@ -686,7 +686,7 @@ function transform_eav_to_dataset(store::DataStore, datafile::DataFile; convert=
         )
         # Save the transformation to the datastore
         add_transformation!(store, transformation)
-        @info "Created transformation with ID: $(transformation.transformation_id)"
+        @debug "Created transformation with ID: $(transformation.transformation_id)"
         # Add the data file as an input to the transformation
         add_transformation_input(store, transformation, datafile.version)
         # Add the data set as an output to the transformation
@@ -979,7 +979,7 @@ function ingest_file(store::DataStore, study::Study, asset_name::String, file_pa
     dest_path = joinpath(store.lake_data, study.name, base_name * version_str * ext)
     mkpath(dirname(dest_path)) # Create directory if it doesn't exist
     cp(file_path, dest_path, force=true)
-    @info "Copied file to data lake: $dest_path"
+    @debug "Copied file to data lake: $dest_path"
     try
         transaction_begin(store)
         if !isnothing(latest_version)
@@ -987,7 +987,7 @@ function ingest_file(store::DataStore, study::Study, asset_name::String, file_pa
         else
             datafile = attach_datafile(store, study, asset_name, dest_path, edam_format; description=description, compress=compress, encrypt=encrypt)
         end
-        @info "Ingested data file for asset: $(asset_name) with version ID: $(datafile.version.version_id)"
+        @debug "Ingested data file for asset: $(asset_name) with version ID: $(datafile.version.version_id)"
         commit = git_commit_info()
         transformation = Transformation(
             transformation_type="ingest",
@@ -998,7 +998,7 @@ function ingest_file(store::DataStore, study::Study, asset_name::String, file_pa
         )
         # Save the transformation to the datastore
         add_transformation!(store, transformation)
-        @info "Created transformation with ID: $(transformation.transformation_id)"
+        @debug "Created transformation with ID: $(transformation.transformation_id)"
         # Add the data set as an output to the transformation
         add_transformation_output(store, transformation, datafile.version)
         transaction_commit(store)
@@ -1008,7 +1008,7 @@ function ingest_file(store::DataStore, study::Study, asset_name::String, file_pa
         transaction_rollback(store)
         if isfile(dest_path)
             rm(dest_path; force=true)
-            @info "Removed copied file from data lake: $dest_path"
+            @debug "Removed copied file from data lake: $dest_path"
         end
         return nothing
     end

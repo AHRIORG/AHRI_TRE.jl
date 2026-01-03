@@ -662,7 +662,6 @@ end
 
 function sql_to_dataset(store::DataStore, study::Study, domain::Domain, dataset_name::String, conn::DBInterface.Connection, db_flavour::DatabaseFlavour, sql::String;
     description::String, replace::Bool=false, new_version::Union{VersionNumber,Nothing}=nothing)::DataSet
-    @info "Saving sql query to datastore"
     if isnothing(store)
         throw(ArgumentError("DataStore cannot be nothing"))
     end
@@ -689,10 +688,8 @@ function sql_to_dataset(store::DataStore, study::Study, domain::Domain, dataset_
         end
         dataset = DataSet(version=get_latest_version(existing_asset))
         register_dataset(store, dataset)
-        @info "Registered dataset with name: $(dataset.version.asset.name)"
         dataset.variables = dataset_meta
         save_dataset_variables!(store, dataset)
-        @info "Saved $(length(dataset.variables)) variables to dataset version $(dataset.version.version_id)"
         # Execute the SQL and save data in the this dataset in the datasore (using the ducklake)
         load_query(store, dataset, conn, sql)
         @info "Loaded data into dataset $(dataset.version.asset.name) version $(dataset.version.version_id)"

@@ -211,7 +211,7 @@ function git_commit_info(dir::Union{AbstractString,Nothing}=nothing; short::Bool
         end
         return (repo_url=missing, commit=missing, script_relpath=script_abs)
     end
-    @info "Git repository root detected at: $root" 
+    @debug "Git repository root detected at: $root" 
     # Current commit hash
     commit = try
         h = readchomp(pipeline(`$(Git.git()) -C $(root) rev-parse HEAD`; stderr=devnull))
@@ -219,7 +219,7 @@ function git_commit_info(dir::Union{AbstractString,Nothing}=nothing; short::Bool
     catch
         missing
     end
-    @info "Current commit hash: $(commit === missing ? "not found" : commit)"
+    @debug "Current commit hash: $(commit === missing ? "not found" : commit)"
     # Remote URL (origin)
     repo_url = try
         u = readchomp(pipeline(`$(Git.git()) -C $(root) config --get remote.origin.url`; stderr=devnull))
@@ -227,7 +227,7 @@ function git_commit_info(dir::Union{AbstractString,Nothing}=nothing; short::Bool
     catch
         missing
     end
-    @info "Repository URL: $(repo_url === missing ? "not found" : repo_url)"
+    @debug "Repository URL: $(repo_url === missing ? "not found" : repo_url)"
     # Script relpath (relative to repo root)
     script_relpath = try
         if script_path === nothing || isempty(String(script_path))
@@ -238,7 +238,7 @@ function git_commit_info(dir::Union{AbstractString,Nothing}=nothing; short::Bool
     catch
         missing
     end
-    @info "Script relative path in repo: $(script_relpath === missing ? "not found" : script_relpath)"
+    @debug "Script relative path in repo: $(script_relpath === missing ? "not found" : script_relpath)"
     return (repo_url=repo_url, commit=commit, script_relpath=script_relpath)
 end
 """
