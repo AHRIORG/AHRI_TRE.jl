@@ -112,6 +112,43 @@ _normalize_remote(url::AbstractString) = begin
     replace(s, r"\.git$" => "")
 end
 
+function _looks_like_editor_or_julia_internal(path::AbstractString)
+    p = String(path)
+    return occursin("/.vscode-server/extensions/", p) ||
+           occursin("/scripts/terminalserver/", p) ||
+           occursin("/usr/local/julia/", p) ||
+           occursin("/lib/julia/", p) ||
+           occursin("/cache/build/", p) ||
+           occursin("/workspace/srcdir/", p)
+end
+
+function _find_external_script_path(package_src_dir::AbstractString)::Union{String,Nothing}
+    for fr in stacktrace()
+        raw = try
+            String(fr.file)
+        catch
+            ""
+        end
+        isempty(raw) && continue
+        raw == "none" && continue
+        startswith(raw, "REPL[") && continue
+
+        abs = try
+            abspath(raw)
+        catch
+            raw
+        end
+
+        startswith(abs, package_src_dir) && continue
+        _looks_like_editor_or_julia_internal(abs) && continue
+
+        if endswith(lowercase(abs), ".jl") && isfile(abs)
+            return abs
+        end
+    end
+    return nothing
+end
+
 """
     git_commit_info(dir::Union{AbstractString,Nothing}=nothing; short::Bool=true, script_path::Union{AbstractString,Nothing}=nothing)
 
@@ -124,7 +161,8 @@ Returns a tuple with:
 - `commit`: The commit hash (or `missing` if not found).
 - `script_relpath`: The relative path of the script from the repository root (or `missing` if not found).
 This function normalizes SSH remotes to HTTPS format.
-If the script is not in a git repository, it returns `missing` for all fields.
+If the script is not in a git repository, `repo_url` and `commit` are `missing`.
+If a script path can be determined, `script_relpath` is set to the absolute script path.
 """
 function git_commit_info(dir::Union{AbstractString,Nothing}=nothing; short::Bool=true, script_path::Union{AbstractString,Nothing}=nothing)
 
@@ -136,18 +174,17 @@ function git_commit_info(dir::Union{AbstractString,Nothing}=nothing; short::Bool
     # - Avoid @__FILE__ defaults: inside a package that points to the package source file.
     # - Prefer the *external* caller when possible.
     if script_path === nothing || isempty(String(script_path))
-        caller_path = caller_file_runtime(2)
-        if caller_path !== nothing && !isempty(String(caller_path))
-            # If the caller frame is inside the package source tree, it's not the user's script.
-            if startswith(abspath(String(caller_path)), package_src_dir)
-                script_path = nothing
-            else
-                script_path = caller_path
+        # 1) Best effort: scan the stacktrace for a real external .jl file.
+        script_path = _find_external_script_path(package_src_dir)
+
+        # 2) Fall back to Base.PROGRAM_FILE if it's a plausible script (not editor/internal plumbing).
+        if (script_path === nothing || isempty(String(script_path))) && !isempty(Base.PROGRAM_FILE)
+            program_file = Base.PROGRAM_FILE
+            if !_looks_like_editor_or_julia_internal(program_file)
+                script_path = program_file
             end
         end
-        if (script_path === nothing || isempty(String(script_path))) && !isempty(Base.PROGRAM_FILE)
-            script_path = Base.PROGRAM_FILE
-        end
+
         if script_path !== nothing && isempty(String(script_path))
             script_path = nothing
         end
