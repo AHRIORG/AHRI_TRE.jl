@@ -32,7 +32,8 @@ export
     get_domain, add_domain!, update_domain, get_domains,
     get_study, get_studies, add_study!, add_study_domain!, get_study_domains,
     get_entity, create_entity!, get_entityrelation, create_entity_relation!, list_domainentities, list_domainrelations, get_domainentities, get_domainrelations,
-    get_variable, add_variable!, get_domain_variables, get_dataset_variables, get_study_variables,update_variable!,
+    get_variable, add_variable!,update_variable!, 
+    get_domain_variables, get_dataset_variables, get_study_variables,save_dataset_variables!,
     create_asset, get_asset, get_study_assets,
     ingest_file, ingest_file_version, get_datafile_metadata, get_study_datafiles,
     ingest_redcap_project, transform_eav_to_dataset,
@@ -48,7 +49,7 @@ upsert_variable!,
 attach_datafile,attach_datafile_version,
 get_datasetname,
 dataset_to_dataframe,dataset_to_arrow,dataset_to_csv,
-dataset_variables,load_query,save_dataset_variables!,
+dataset_variables,load_query,
 register_redcap_datadictionary
 
 #region Structure
@@ -738,7 +739,9 @@ function get_dataset(store::DataStore, study_name::String, dataset_name::String)
         @error "No versions found for dataset asset: $dataset_name in study $study_name"
         return nothing
     end
-    return DataSet(version=version)
+    dataset = DataSet(version=version)
+    dataset.variables = get_dataset_variables(store, dataset)
+    return dataset
 end
 """
     get_dataset_versions(store::DataStore, study_name::String, dataset_name::String)::Vector{DataSet}
@@ -761,7 +764,9 @@ function get_dataset_versions(store::DataStore, study_name::String, dataset_name
     end
     datasets = DataSet[]
     for version in asset.versions
-        push!(datasets, DataSet(version=version))
+        dataset = DataSet(version=version)
+        dataset.variables = get_dataset_variables(store, dataset)
+        push!(datasets, dataset)
     end
     return datasets
 end
