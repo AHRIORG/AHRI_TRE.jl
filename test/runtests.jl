@@ -46,4 +46,7 @@ using AHRI_TRE
 
     # Include datafile ingest + metadata tests
     include("test_datafiles.jl")
+
+    # Include git_commit_info script path tests
+    include("test_git_commit_info.jl")
 end

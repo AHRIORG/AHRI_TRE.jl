@@ -28,7 +28,7 @@ function _tre_port()::Int
 end
 
 function open_tre_store_nolake()
-    keys = ["TRE_SERVER", "TRE_USER", "TRE_PWD", "TRE_DBNAME"]
+    keys = ["TRE_SERVER", "TRE_USER", "TRE_PWD", "TRE_TEST_DBNAME"]
     values, missing = _gather_env(keys)
     if !isempty(missing)
         return nothing, missing
@@ -38,7 +38,7 @@ function open_tre_store_nolake()
         server=values["TRE_SERVER"],
         user=values["TRE_USER"],
         password=values["TRE_PWD"],
-        dbname=values["TRE_DBNAME"],
+        dbname=values["TRE_TEST_DBNAME"],
     )
 
     try

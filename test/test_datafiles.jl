@@ -31,10 +31,11 @@ function open_tre_store_with_lake()
         "TRE_SERVER",
         "TRE_USER",
         "TRE_PWD",
-        "TRE_DBNAME",
-        "TRE_LAKE_PATH",
+        "TRE_TEST_DBNAME",
+        "TRE_TEST_LAKE_PATH",
         "LAKE_USER",
         "LAKE_PASSWORD",
+        "TRE_TEST_LAKE_DB",
     ]
     values, missing = _gather_env_datafiles(keys)
     if !isempty(missing)
@@ -45,11 +46,11 @@ function open_tre_store_with_lake()
         server=values["TRE_SERVER"],
         user=values["TRE_USER"],
         password=values["TRE_PWD"],
-        dbname=values["TRE_DBNAME"],
-        lake_data=values["TRE_LAKE_PATH"],
+        dbname=values["TRE_TEST_DBNAME"],
+        lake_data=values["TRE_TEST_LAKE_PATH"],
         lake_user=values["LAKE_USER"],
         lake_password=values["LAKE_PASSWORD"],
-        lake_db=get(ENV, "TRE_LAKE_DB", "ducklake_catalog"),
+        lake_db=values["TRE_TEST_LAKE_DB"],
     )
 
     try

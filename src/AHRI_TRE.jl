@@ -32,8 +32,8 @@ export
     get_domain, add_domain!, update_domain, get_domains,
     get_study, get_studies, add_study!, add_study_domain!, get_study_domains,
     get_entity, create_entity!, get_entityrelation, create_entity_relation!, list_domainentities, list_domainrelations, get_domainentities, get_domainrelations,
-    get_variable, add_variable!,update_variable!, 
-    get_domain_variables, get_dataset_variables, get_study_variables,save_dataset_variables!,
+    get_variable, add_variable!, update_variable!,
+    get_domain_variables, get_dataset_variables, get_study_variables, save_dataset_variables!,
     create_asset, get_asset, get_study_assets,
     ingest_file, ingest_file_version, get_datafile_metadata, get_study_datafiles,
     ingest_redcap_project, transform_eav_to_dataset,
@@ -185,9 +185,9 @@ Base.@kwdef mutable struct Transformation
     transformation_id::Union{Int,Nothing} = nothing
     transformation_type::String = "transform" # "ingest", "transform", "entity", "export"
     description::String
-    repository_url::Union{String,Nothing} = nothing
-    commit_hash::Union{String,Nothing} = nothing
-    file_path::Union{String,Nothing} = nothing # Path to the script or notebook in the repository
+    repository_url::Union{String,Nothing,Missing} = nothing
+    commit_hash::Union{String,Nothing,Missing} = nothing
+    file_path::Union{String,Nothing,Missing} = nothing # Path to the script or notebook in the repository
     inputs::Vector{AssetVersion} = AssetVersion[] # Input asset versions
     outputs::Vector{AssetVersion} = AssetVersion[] # Output asset versions
 end
@@ -514,9 +514,9 @@ function prepare_datafile(file_path::AbstractString, edam_format::String; compre
             throw(ArgumentError("Compressed file already exists: $compressed_path"))
         end
     end
-
+    @info "Calculating SHA-256 digest for file: $file_path"
     datafile.digest = sha256_digest_hex(file_path)
-
+    @info "Calculated digest: $(datafile.digest)"
     return datafile
 end
 
@@ -926,6 +926,23 @@ function create_entity_relation!(store::DataStore, subject_name::String, object_
     return entityrelation
 end
 """
+    get_datalake_file_path(store::DataStore, study::Study, asset_name::String, file_path::AbstractString, version::VersionNumber)::String
+
+Get the destination file path in the data lake for a given file to be ingested.
+- `store`: The DataStore object containing connection details for the datastore and data lake.
+- `study`: The Study object to associate with the ingested file.
+- `asset_name`: The name of the asset to which the file will be attached. Must comply with xsd:NCName restrictions.
+- `file_path`: The full path including the file name to the file to be ingested.
+- `version`: The version number for the file to be ingested.
+"""
+function get_datalake_file_path(store::DataStore, study::Study, asset_name::String, file_path::AbstractString, version::VersionNumber)::String
+    base_name = to_ncname(asset_name, strict=true)
+    version_str = to_ncname(string(version), strict=true)
+    _, ext = splitext(basename(file_path))
+    dest_path = joinpath(store.lake_data, "files", study.name, base_name * version_str * ext)
+    return dest_path
+end
+"""
     ingest_file(store::DataStore, study::Study, asset_name::String, file_path::AbstractString, edam_format::String;
     description::Union{String,Missing}=missing, compress::Bool=false, encrypt::Bool=false, new_version::Bool=false, bumpmajor::Bool = false, bumpminor::Bool=false)::Union{DataFile,Nothing}
 
@@ -961,8 +978,6 @@ function ingest_file(store::DataStore, study::Study, asset_name::String, file_pa
     if !isnothing(existing_asset) && !new_version
         throw(ArgumentError("Asset with name $asset_name already exists in study $(study.name). Use `new_version=true` to add a new version."))
     end
-    _, ext = splitext(basename(file_path))
-    base_name = to_ncname(asset_name, strict=true) # use the asset name instead of the original filename
     version = VersionNumber(1, 0, 0)
     latest_version = nothing
     # if there is an existing asset get the latest version
@@ -979,9 +994,7 @@ function ingest_file(store::DataStore, study::Study, asset_name::String, file_pa
             version = VersionNumber(latest_version.major, latest_version.minor, latest_version.patch + 1)
         end
     end
-    # Copy the file to the data lake directory
-    version_str = to_ncname(string(version), strict=true)
-    dest_path = joinpath(store.lake_data, study.name, base_name * version_str * ext)
+    dest_path = get_datalake_file_path(store, study, isnothing(existing_asset) ? asset_name : existing_asset.name, file_path, version)
     mkpath(dirname(dest_path)) # Create directory if it doesn't exist
     cp(file_path, dest_path, force=true)
     @debug "Copied file to data lake: $dest_path"
@@ -1013,8 +1026,9 @@ function ingest_file(store::DataStore, study::Study, asset_name::String, file_pa
         transaction_rollback(store)
         if isfile(dest_path)
             rm(dest_path; force=true)
-            @debug "Removed copied file from data lake: $dest_path"
+            @info "Removed copied file from data lake: $dest_path"
         end
+        rethrow(e)
         return nothing
     end
 end

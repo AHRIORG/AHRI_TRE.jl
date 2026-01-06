@@ -16,21 +16,29 @@ if [ -z "${SAMBA_USERNAME}" ] || [ -z "${SAMBA_PASSWORD}" ]; then
     exit 0
 fi
 
-# Create mount point
-mkdir -p /mnt/lakehouse
+mount_share() {
+    local share="$1"
+    local mountpoint_path="$2"
 
-# Check if already mounted
-if mountpoint -q /mnt/lakehouse; then
-    echo "Samba share already mounted at /mnt/lakehouse"
-    exit 0
-fi
+    mkdir -p "${mountpoint_path}"
 
-# Mount the Samba share
-echo "Mounting Samba share..."
-if mount -t cifs //dbn-pure-nas-01.ahri.org/lakehouse /mnt/lakehouse \
-    -o username="${SAMBA_USERNAME}",password="${SAMBA_PASSWORD}",uid=0,gid=0; then
-    echo "✓ Samba share mounted successfully at /mnt/lakehouse"
-else
-    echo "✗ Failed to mount Samba share"
-    exit 1
-fi
+    if mountpoint -q "${mountpoint_path}"; then
+        echo "Samba share already mounted at ${mountpoint_path}"
+        return 0
+    fi
+
+    echo "Mounting Samba share ${share} at ${mountpoint_path}..."
+    if mount -t cifs "${share}" "${mountpoint_path}" \
+        -o username="${SAMBA_USERNAME}",password="${SAMBA_PASSWORD}",uid=0,gid=0; then
+        echo "✓ Samba share mounted successfully at ${mountpoint_path}"
+    else
+        echo "✗ Failed to mount Samba share ${share}"
+        return 1
+    fi
+}
+
+# Mount the main lakehouse share
+mount_share //dbn-pure-nas-01.ahri.org/lakehouse /mnt/lakehouse
+
+# Mount the test lake share
+mount_share //DBN-Pure-Nas-01.ahri.org/testlake /mnt/test_lake

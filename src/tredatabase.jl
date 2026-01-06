@@ -93,10 +93,12 @@ function opendatastore(server::AbstractString, user::AbstractString, password::A
             @warn "Failed loading ducklake/postgres extensions" exception = e
         end
         try
+            # Use `lake_db` for METADATA_SCHEMA (historic behavior: these were the same).
+            metadata_schema_sql = replace(String(lake_db), "'" => "''")
             DBInterface.execute(
                 lake,
                 "ATTACH 'ducklake:postgres:host=$(server) port=$(port) user=$(lake_user) password=$(lake_password) dbname=$(lake_db)' 
-                 AS $LAKE_ALIAS (DATA_PATH '$lake_data', METADATA_SCHEMA 'ducklake_catalog');"
+                 AS $LAKE_ALIAS (DATA_PATH '$lake_data', METADATA_SCHEMA '$(metadata_schema_sql)');"
             )
             DBInterface.execute(lake, "USE $LAKE_ALIAS;")
         catch e

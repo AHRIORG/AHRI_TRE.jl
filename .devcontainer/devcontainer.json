@@ -8,6 +8,10 @@
   "workspaceFolder": "/workspace",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
 
+  "mounts": [
+    "source=${localEnv:HOST_DATA_DIR},target=/host_data,type=bind"
+  ],
+
   "runArgs": [
     "--env-file", ".env",
     "--privileged"

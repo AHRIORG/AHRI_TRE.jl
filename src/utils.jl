@@ -122,6 +122,49 @@ function _looks_like_editor_or_julia_internal(path::AbstractString)
            occursin("/workspace/srcdir/", p)
 end
 
+function _canonical_path(path::AbstractString)::String
+    p = abspath(String(path))
+    try
+        return realpath(p)
+    catch
+        return p
+    end
+end
+
+const _PACKAGE_INTERNAL_FILES_CACHE = Dict{String, Set{String}}()
+
+function _package_internal_files(package_src_dir::AbstractString)::Set{String}
+    pkgdir = _canonical_path(package_src_dir)
+    return get!(_PACKAGE_INTERNAL_FILES_CACHE, pkgdir) do
+        files = Set{String}()
+
+        # Always treat the module entrypoint itself as internal.
+        modfile = joinpath(pkgdir, "AHRI_TRE.jl")
+        isfile(modfile) && push!(files, _canonical_path(modfile))
+
+        # Parse include("...") statements to determine which files are library internals.
+        # This is more precise than blanket excluding `src/`, because this repo also keeps
+        # executable scripts under `src/` and `src/testing/`.
+        if isfile(modfile)
+            for line in eachline(modfile)
+                m = match(r"^\s*include\(\"([^\"]+)\"\)", line)
+                m === nothing && continue
+                inc = joinpath(pkgdir, m.captures[1])
+                isfile(inc) && push!(files, _canonical_path(inc))
+            end
+        end
+
+        return files
+    end
+end
+
+# Treat AHRI_TRE's *library* source files (the ones included by `src/AHRI_TRE.jl`) as
+# internal stack frames, but allow executable scripts that live in the same repo.
+function _is_package_internal_source(abs_path::AbstractString, package_src_dir::AbstractString)
+    endswith(lowercase(String(abs_path)), ".jl") || return false
+    return _canonical_path(abs_path) in _package_internal_files(package_src_dir)
+end
+
 function _find_external_script_path(package_src_dir::AbstractString)::Union{String,Nothing}
     for fr in stacktrace()
         raw = try
@@ -134,12 +177,12 @@ function _find_external_script_path(package_src_dir::AbstractString)::Union{Stri
         startswith(raw, "REPL[") && continue
 
         abs = try
-            abspath(raw)
+            _canonical_path(raw)
         catch
             raw
         end
 
-        startswith(abs, package_src_dir) && continue
+        _is_package_internal_source(abs, package_src_dir) && continue
         _looks_like_editor_or_julia_internal(abs) && continue
 
         if endswith(lowercase(abs), ".jl") && isfile(abs)
@@ -176,13 +219,14 @@ function git_commit_info(dir::Union{AbstractString,Nothing}=nothing; short::Bool
     if script_path === nothing || isempty(String(script_path))
         # 1) Best effort: scan the stacktrace for a real external .jl file.
         script_path = _find_external_script_path(package_src_dir)
-
+        @debug "Determined script path from stacktrace: $(script_path === nothing ? "none" : String(script_path))"
         # 2) Fall back to Base.PROGRAM_FILE if it's a plausible script (not editor/internal plumbing).
         if (script_path === nothing || isempty(String(script_path))) && !isempty(Base.PROGRAM_FILE)
             program_file = Base.PROGRAM_FILE
             if !_looks_like_editor_or_julia_internal(program_file)
                 script_path = program_file
             end
+            @debug "Determined script path from Base.PROGRAM_FILE: $(script_path === nothing ? "none" : String(script_path))"
         end
 
         if script_path !== nothing && isempty(String(script_path))
@@ -197,6 +241,7 @@ function git_commit_info(dir::Union{AbstractString,Nothing}=nothing; short::Bool
         else
             dir = pwd()
         end
+        @debug "Determined git search directory: $dir"
     end
 
     # Discover repo root via `git`.
@@ -211,7 +256,7 @@ function git_commit_info(dir::Union{AbstractString,Nothing}=nothing; short::Bool
         end
         return (repo_url=missing, commit=missing, script_relpath=script_abs)
     end
-    @debug "Git repository root detected at: $root" 
+    @debug "Git repository root detected at: $root"
     # Current commit hash
     commit = try
         h = readchomp(pipeline(`$(Git.git()) -C $(root) rev-parse HEAD`; stderr=devnull))
