@@ -1,0 +1,96 @@
+using AHRI_TRE
+using Test
+using UUIDs
+
+function _gather_env_varcrud(keys::Vector{String})
+    values = Dict{String,String}()
+    missing = String[]
+    for key in keys
+        value = get(ENV, key, "")
+        if isempty(value)
+            push!(missing, key)
+        else
+            values[key] = value
+        end
+    end
+    return values, missing
+end
+
+function open_tre_store_varcrud()
+    keys = ["TRE_SERVER", "TRE_USER", "TRE_PWD", "TRE_TEST_DBNAME"]
+    values, missing = _gather_env_varcrud(keys)
+    if !isempty(missing)
+        return nothing, missing
+    end
+
+    # PostgreSQL-only for this test (no DuckDB lake attach).
+    store = AHRI_TRE.DataStore(
+        server=values["TRE_SERVER"],
+        user=values["TRE_USER"],
+        password=values["TRE_PWD"],
+        dbname=values["TRE_TEST_DBNAME"],
+    )
+
+    try
+        conn, lake = AHRI_TRE.opendatastore(
+            values["TRE_SERVER"],
+            values["TRE_USER"],
+            values["TRE_PWD"],
+            values["TRE_TEST_DBNAME"],
+            nothing,
+            nothing,
+            nothing,
+            nothing,
+        )
+        store.store = conn
+        store.lake = lake
+        return store, String[]
+    catch e
+        @warn "Unable to open TRE datastore" exception=(e, catch_backtrace())
+        return nothing, ["TRE datastore connection failed"]
+    end
+end
+
+@testset "Variable creation + retrieval" begin
+    store, missing = open_tre_store_varcrud()
+    if isnothing(store)
+        @test_skip "TRE datastore not configured: $(join(missing, ", "))"
+        return
+    end
+
+    try
+        suffix = replace(string(uuid4()), "-" => "")
+        domain_name = "domain_varcrud_" * suffix
+        var_name = "var_" * suffix
+
+        domain = AHRI_TRE.add_domain!(store, AHRI_TRE.Domain(name=domain_name))
+        @test domain.domain_id !== nothing
+
+        v = AHRI_TRE.Variable(
+            domain_id=Int(domain.domain_id),
+            name=var_name,
+            value_type_id=AHRI_TRE.TRE_TYPE_INTEGER,
+            description="test var",
+        )
+
+        v = AHRI_TRE.add_variable!(store, v)
+        @test v.variable_id !== nothing
+        @test Int(v.variable_id) > 0
+
+        fetched_by_id = AHRI_TRE.get_variable(store, Int(v.variable_id))
+        @test fetched_by_id !== missing
+        @test fetched_by_id.variable_id == v.variable_id
+        @test fetched_by_id.domain_id == Int(domain.domain_id)
+        @test fetched_by_id.name == var_name
+        @test fetched_by_id.value_type_id == AHRI_TRE.TRE_TYPE_INTEGER
+        @test fetched_by_id.description == "test var"
+
+        # Retrieve by (domain name, variable name)
+        fetched_by_name = AHRI_TRE.get_variable(store, domain_name, var_name)
+        @test fetched_by_name !== missing
+        @test fetched_by_name.variable_id == v.variable_id
+        @test fetched_by_name.name == var_name
+    finally
+        AHRI_TRE.closedatastore(store)
+    end
+end

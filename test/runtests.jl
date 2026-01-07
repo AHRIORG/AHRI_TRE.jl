@@ -25,7 +25,7 @@ using AHRI_TRE
 @testset verbose = true "AHRI_TRE.jl" begin
     # Include MSSQL connection tests
     include("test_mssql_connection.jl")
-    
+
     # Include sql_meta tests
     include("test_sql_meta.jl")
 
@@ -49,4 +49,10 @@ using AHRI_TRE
 
     # Include git_commit_info script path tests
     include("test_git_commit_info.jl")
+
+    # Include vocabulary tests
+    include("test_vocabulary.jl")
+
+    # Include variable CRUD tests
+    include("test_variable_crud.jl")
 end

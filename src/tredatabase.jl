@@ -578,23 +578,6 @@ initvalue_types() = DataFrame([(value_type_id=TRE_TYPE_INTEGER, value_type="xsd:
     (value_type_id=TRE_TYPE_CATEGORY, value_type="enumeration", description="Category represented by a Vocabulary with integer value and string code, stored as Integer"),
     (value_type_id=TRE_TYPE_MULTIRESPONSE, value_type="multiresponse", description="Multi-response enumeration with multiple values, stored as an array of integers")
 ])
-
-"""
-    updatevariable_vocabulary(conn::DBInterface.Connection, name, domain_id, vocabulary_id)
-
-Update variable vocabulary
-- `conn`: The database connection
-- `name`: The name of the variable (supports SQL LIKE patterns)
-- `domain_id`: The domain ID of the variable
-- `vocabulary_id`: The new vocabulary ID to set
-- returns: nothing
-"""
-function updatevariable_vocabulary(conn::DBInterface.Connection, name, domain_id, vocabulary_id)
-    sql = raw"UPDATE variables SET vocabulary_id = $1 WHERE name LIKE $2 AND domain_id = $3;"
-    stmt = DBInterface.prepare(conn, sql)
-    DBInterface.execute(stmt, (vocabulary_id, "%$name%", domain_id))
-    return nothing
-end
 """
     createassets(conn::DBInterface.Connection)
 
@@ -2347,6 +2330,14 @@ function add_variable!(datastore::DataStore, variable::Variable)::Variable
     end
     return variable
 end
+"""
+    update_variable!(datastore::DataStore, variable::Variable)::Variable
+
+Update an existing Variable in the TRE datastore.
+- 'datastore' is the DataStore object containing the database connection.
+- 'variable' is the Variable object to update. It must have a valid variable_id.
+This function will update the variable in the database and return the updated Variable object.
+"""
 function update_variable!(datastore::DataStore, variable::Variable)::Variable
     if isnothing(variable.variable_id)
         error("Variable must have a variable_id to update")
@@ -2435,8 +2426,9 @@ Return a Vocabulary object by its vocabulary_id in the specified DataStore.
 If no vocabulary is found, it returns `nothing`.
 If a vocabulary is found, it returns a Vocabulary object with its items populated.
 """
-function get_vocabulary(store::DataStore, vocabulary_id::Int)::Union{Vocabulary,Nothing}
+function get_vocabulary(store::DataStore, vocabulary_id::Integer)::Union{Vocabulary,Nothing}
     db = store.store
+    vocabulary_id_int = Int(vocabulary_id)
     sql = raw"""
         SELECT v.*, 
           vi.vocabulary_item_id,
@@ -2448,13 +2440,13 @@ function get_vocabulary(store::DataStore, vocabulary_id::Int)::Union{Vocabulary,
         WHERE v.vocabulary_id = $1;
     """
     stmt = DBInterface.prepare(db, sql)
-    df = DBInterface.execute(stmt, (vocabulary_id,)) |> DataFrame
+    df = DBInterface.execute(stmt, (vocabulary_id_int,)) |> DataFrame
     if nrow(df) == 0
         return nothing
     end
     row = df[1, :]
     vocabulary = Vocabulary(
-        vocabulary_id=vocabulary_id,
+        vocabulary_id=vocabulary_id_int,
         name=row.name,
         description=coalesce(row.description, missing)
     )
@@ -2462,7 +2454,7 @@ function get_vocabulary(store::DataStore, vocabulary_id::Int)::Union{Vocabulary,
         if !ismissing(row.value)
             item = VocabularyItem(
                 vocabulary_item_id=row.vocabulary_item_id,
-                vocabulary_id=vocabulary_id,
+                vocabulary_id=vocabulary_id_int,
                 value=row.value,
                 code=row.code,
                 description=coalesce(row.item_description, missing)
@@ -2482,7 +2474,7 @@ function get_vocabulary(store::DataStore, name::AbstractString)::Union{Vocabular
     if ismissing(vocab_id)
         return nothing
     end
-    return get_vocabulary(store, vocab_id)
+    return get_vocabulary(store, Int(vocab_id))
 end
 """
     get_study_variables(store::DataStore, study::Study, domain::Union{Domain,Nothing}=nothing)::Vector{Variable}

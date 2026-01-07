@@ -34,7 +34,7 @@ export
     get_entity, create_entity!, get_entityrelation, create_entity_relation!, list_domainentities, list_domainrelations, get_domainentities, get_domainrelations,
     get_variable, add_variable!, update_variable!,
     get_domain_variables, get_dataset_variables, get_study_variables, save_dataset_variables!,
-    get_vocabulary,
+    get_vocabulary,ensure_vocabulary!,
     create_asset, get_asset, get_study_assets,
     ingest_file, ingest_file_version, get_datafile_metadata, get_study_datafiles,
     ingest_redcap_project, transform_eav_to_dataset,
@@ -273,7 +273,7 @@ end
 """
 function get_variable_id(db::DBInterface.Connection, domain, name)
     stmt = prepareselectstatement(db, "variables", ["variable_id"], ["domain_id", "name"])
-    result = DBInterface.execute(stmt, [domain, name]; iterate_rows=true) |> DataFrame
+    result = DBInterface.execute(stmt, [domain, name]) |> DataFrame
     if nrow(result) == 0
         return missing
     else
@@ -287,10 +287,11 @@ Returns the entry of variable with `variable_id`
 - store: The DataStore object containing the datastore connection.
 - variable_id: The integer ID of the variable to retrieve.
 """
-function get_variable(store::DataStore, variable_id::Int)::Union{Variable,Missing}
+function get_variable(store::DataStore, variable_id::Integer)::Union{Variable,Missing}
     db = store.store
+    variable_id_int = Int(variable_id)
     stmt = prepareselectstatement(db, "variables", ["*"], ["variable_id"])
-    result = DBInterface.execute(stmt, [variable_id]) |> DataFrame
+    result = DBInterface.execute(stmt, [variable_id_int]) |> DataFrame
     if nrow(result) == 0
         return missing
     end
@@ -314,7 +315,12 @@ Retrieve a Variable by its domain name and variable name.
 - returns: The Variable object if found, otherwise `missing`.
 """
 function get_variable(store::DataStore, domain::AbstractString, name::AbstractString)::Union{Variable,Missing}
-    variable_id = get_variable_id(store.store, domain, name)
+    dom = get_domain(store, domain)
+    if isnothing(dom) || isnothing(dom.domain_id)
+        return missing
+    end
+
+    variable_id = get_variable_id(store.store, dom.domain_id, name)
     if ismissing(variable_id)
         return missing
     end
