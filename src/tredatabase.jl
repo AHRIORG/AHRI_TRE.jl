@@ -2610,12 +2610,14 @@ end
 
 Persist the variable metadata attached to `dataset.variables` into the datastore metadata tables:
 
-- Upserts rows in `variables` (unique on `(domain_id, name)`)
-- Creates/updates vocabularies and vocabulary_items for categorical/multiresponse variables
+- Inserts rows in `variables` (unique on `(domain_id, name)`) if they don't exist, preserving existing attributes
+- Creates vocabularies and vocabulary_items for categorical/multiresponse variables if they don't exist
 - Links the dataset version to its variables in `dataset_variables`
 
 On return, each `Variable` in `dataset.variables` will have `variable_id` (and where applicable
 `vocabulary_id`) populated.
+
+Note: This function will NOT overwrite existing variable attributes or vocabularies if they already exist.
 """
 function save_dataset_variables!(store::DataStore, dataset::DataSet)::Nothing
     db = store.store
@@ -2627,34 +2629,62 @@ function save_dataset_variables!(store::DataStore, dataset::DataSet)::Nothing
     end
 
     for var in dataset.variables
-        # Resolve vocabulary_id if this variable carries a vocabulary payload.
-        vocab_id = missing
-        if var.value_type_id in (TRE_TYPE_CATEGORY, TRE_TYPE_MULTIRESPONSE)
-            if !ismissing(var.vocabulary)
-                vocab_id = ensure_vocabulary!(store, var.vocabulary)
-                var.vocabulary_id = Int(vocab_id)
-                var.vocabulary.vocabulary_id = Int(vocab_id)
-            elseif !(var.vocabulary_id === missing)
-                vocab_id = Int(var.vocabulary_id)
+        # Check if variable already exists (fast path; avoids any domain-name lookups).
+        existing_variable_id = get_variable_id(db, var.domain_id, var.name)
+        if !ismissing(existing_variable_id)
+            # Variable exists - reuse its IDs without updating attributes.
+            existing = get_variable(store, Int(existing_variable_id))
+            if ismissing(existing)
+                var.variable_id = Int(existing_variable_id)
+            else
+                var.variable_id = existing.variable_id
+                if !ismissing(existing.vocabulary_id)
+                    var.vocabulary_id = existing.vocabulary_id
+                end
+                if !ismissing(existing.vocabulary)
+                    var.vocabulary = existing.vocabulary
+                end
             end
+        else
+            # Variable doesn't exist - create it with vocabulary if needed
+            vocab_id = missing
+            if var.value_type_id in (TRE_TYPE_CATEGORY, TRE_TYPE_MULTIRESPONSE)
+                if !ismissing(var.vocabulary)
+                    # Check if vocabulary already exists by name
+                    existing_vocab = get_vocabulary(store, var.vocabulary.name)
+                    if !isnothing(existing_vocab)
+                        # Use existing vocabulary without updating
+                        vocab_id = existing_vocab.vocabulary_id
+                        var.vocabulary_id = Int(vocab_id)
+                        var.vocabulary = existing_vocab
+                    else
+                        # Create new vocabulary
+                        vocab_id = ensure_vocabulary!(store, var.vocabulary)
+                        var.vocabulary_id = Int(vocab_id)
+                        var.vocabulary.vocabulary_id = Int(vocab_id)
+                    end
+                elseif !(var.vocabulary_id === missing)
+                    vocab_id = Int(var.vocabulary_id)
+                end
+            end
+
+            value_format = (var.value_format === nothing) ? missing : var.value_format
+            vocabulary_arg = (vocab_id === missing) ? missing : Int(vocab_id)
+
+            # Insert new variable record and capture variable_id.
+            variable_id = upsert_variable!(
+                store,
+                var.domain_id,
+                var.name;
+                value_type_id=var.value_type_id,
+                value_format=value_format,
+                vocabulary_id=vocabulary_arg,
+                description=var.description,
+                note=var.note,
+                keyrole=var.keyrole
+            )
+            var.variable_id = Int(variable_id)
         end
-
-        value_format = (var.value_format === nothing) ? missing : var.value_format
-        vocabulary_arg = (vocab_id === missing) ? missing : Int(vocab_id)
-
-        # Upsert variable record and capture variable_id.
-        variable_id = upsert_variable!(
-            store,
-            var.domain_id,
-            var.name;
-            value_type_id=var.value_type_id,
-            value_format=value_format,
-            vocabulary_id=vocabulary_arg,
-            description=var.description,
-            note=var.note,
-            keyrole=var.keyrole
-        )
-        var.variable_id = Int(variable_id)
     end
 
     # Link dataset to its variables
