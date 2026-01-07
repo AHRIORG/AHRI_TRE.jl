@@ -34,6 +34,7 @@ export
     get_entity, create_entity!, get_entityrelation, create_entity_relation!, list_domainentities, list_domainrelations, get_domainentities, get_domainrelations,
     get_variable, add_variable!, update_variable!,
     get_domain_variables, get_dataset_variables, get_study_variables, save_dataset_variables!,
+    get_vocabulary,
     create_asset, get_asset, get_study_assets,
     ingest_file, ingest_file_version, get_datafile_metadata, get_study_datafiles,
     ingest_redcap_project, transform_eav_to_dataset,
@@ -296,23 +297,22 @@ function get_variable(store::DataStore, variable_id::Int)::Union{Variable,Missin
     variable = Variable(; copy(result[1, :])...)
     # If the variable has a vocabulary, retrieve it
     if !ismissing(variable.vocabulary_id)
-        vocab_stmt = prepareselectstatement(db, "vocabularies", ["*"], ["vocabulary_id"])
-        vocab_result = DBInterface.execute(vocab_stmt, [variable.vocabulary_id]) |> DataFrame
-        if nrow(vocab_result) > 0
-            vocabulary = Vocabulary(; copy(vocab_result[1, :])...)
-            # Retrieve vocabulary items
-            item_stmt = prepareselectstatement(db, "vocabulary_items", ["*"], ["vocabulary_id"])
-            item_result = DBInterface.execute(item_stmt, [variable.vocabulary_id]) |> DataFrame
-            items = VocabularyItem[]
-            for row in eachrow(item_result)
-                push!(items, VocabularyItem(; copy(row)...))
-            end
-            vocabulary.items = items
-            variable.vocabulary = vocabulary
+        vocab = get_vocabulary(store, variable.vocabulary_id)
+        if !isnothing(vocab)
+            variable.vocabulary = vocab
         end
     end
     return variable
 end
+"""
+    get_variable(store::DataStore, domain::AbstractString, name::AbstractString)::Union{Variable,Missing}
+
+Retrieve a Variable by its domain name and variable name.
+- store: The DataStore object containing the datastore connection.
+- domain: The name of the domain containing the variable.
+- name: The name of the variable to retrieve.
+- returns: The Variable object if found, otherwise `missing`.
+"""
 function get_variable(store::DataStore, domain::AbstractString, name::AbstractString)::Union{Variable,Missing}
     variable_id = get_variable_id(store.store, domain, name)
     if ismissing(variable_id)
