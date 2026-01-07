@@ -3,6 +3,8 @@ using Test
 using UUIDs
 using DBInterface
 
+unique_test_suffix() = replace("$(time_ns())_$(getpid())_$(uuid4())", "-" => "")
+
 function _gather_env_vocab(keys::Vector{String})
     values = Dict{String,String}()
     missing = String[]
@@ -60,8 +62,9 @@ end
         return
     end
 
+    vocab_id_1 = nothing
     try
-        vocab_name = "vocab_" * replace(string(uuid4()), "-" => "")
+        vocab_name = "vocab_" * unique_test_suffix()
 
         # 1) Add via ensure_vocabulary! and retrieve
         items_v1 = AHRI_TRE.VocabularyItem[
@@ -81,12 +84,19 @@ end
         @test length(fetched_1.items) == 2
         @test Set([(it.value, it.code) for it in fetched_1.items]) == Set([(1, "A"), (2, "B")])
 
-        # 2) Duplicate name insert (bypassing ensure) should error due to UNIQUE(name)
-        @test_throws Exception DBInterface.execute(
+        # 2) Assert the UNIQUE constraint exists (without relying on a thrown error
+        # that can be noisy in CI logs).
+        df_constraint = DBInterface.execute(
             store.store,
-            "INSERT INTO vocabularies (name, description) VALUES (\$1, \$2);",
-            (vocab_name, "dup"),
-        )
+            raw"""
+                SELECT conname
+                FROM pg_constraint
+                WHERE conrelid = 'public.vocabularies'::regclass
+                  AND contype = 'u'
+                  AND conname = 'vocabularies_name_key';
+            """,
+        ) |> DataFrame
+        @test nrow(df_constraint) == 1
 
         # 3) Update via ensure_vocabulary! (same name, new description + new items)
         items_v2 = AHRI_TRE.VocabularyItem[
@@ -107,6 +117,15 @@ end
         @test fetched_2.items[1].vocabulary_id == vocab_id_1
         @test fetched_2.items[1].vocabulary_item_id !== nothing
     finally
+        # Cleanup: keep test DB from accumulating vocabularies across runs
+        if !isnothing(vocab_id_1)
+            try
+                DBInterface.execute(store.store, raw"DELETE FROM vocabulary_items WHERE vocabulary_id = $1;", (Int(vocab_id_1),))
+                DBInterface.execute(store.store, raw"DELETE FROM vocabularies WHERE vocabulary_id = $1;", (Int(vocab_id_1),))
+            catch e
+                @warn "Vocabulary test cleanup failed" exception=(e, catch_backtrace())
+            end
+        end
         AHRI_TRE.closedatastore(store)
     end
 end
