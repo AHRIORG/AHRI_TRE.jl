@@ -2316,6 +2316,9 @@ Add a Variable to the TRE datastore, upserting if it already exists.
 This function will upsert the variable into the database and set its variable_id.
 """
 function add_variable!(datastore::DataStore, variable::Variable)::Variable
+    if !ismissing(variable.vocabulary)
+        variable.vocabulary_id = ensure_vocabulary!(datastore, variable.vocabulary)
+    end
     variable.variable_id = upsert_variable!(datastore, variable.domain_id, variable.name;
         value_type_id=variable.value_type_id,
         value_format=variable.value_format,
@@ -2325,9 +2328,6 @@ function add_variable!(datastore::DataStore, variable::Variable)::Variable
         keyrole=variable.keyrole,
         ontology_namespace=variable.ontology_namespace,
         ontology_class=variable.ontology_class)
-    if !ismissing(variable.vocabulary)
-        variable.vocabulary_id = ensure_vocabulary!(datastore, variable.vocabulary)
-    end
     return variable
 end
 """
@@ -2341,6 +2341,9 @@ This function will update the variable in the database and return the updated Va
 function update_variable!(datastore::DataStore, variable::Variable)::Variable
     if isnothing(variable.variable_id)
         error("Variable must have a variable_id to update")
+    end
+    if !ismissing(variable.vocabulary)
+        variable.vocabulary_id = ensure_vocabulary!(datastore, variable.vocabulary)
     end
     stmt = DBInterface.prepare(
         datastore.store,
@@ -2362,10 +2365,6 @@ function update_variable!(datastore::DataStore, variable::Variable)::Variable
     DBInterface.execute(stmt, (variable.domain_id, variable.name, variable.value_type_id, variable.value_format,
         variable.vocabulary_id, variable.description, variable.note, variable.keyrole,
         variable.ontology_namespace, variable.ontology_class, variable.variable_id))
-    if !ismissing(variable.vocabulary)
-        variable.vocabulary_id = ensure_vocabulary!(datastore, variable.vocabulary)
-    end
-
     return variable
 end
 """
