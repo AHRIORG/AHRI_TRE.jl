@@ -37,7 +37,8 @@ Core metadata extraction from SQL queries:
 - Executes query with LIMIT 0 to get column metadata without fetching data
 - Maps SQL types to TRE_TYPE_* constants (INTEGER, FLOAT, STRING, DATE, DATETIME, TIME, CATEGORY)
 - Auto-detects CATEGORY types from ENUMs, CHECK constraints, or small reference tables (<250 rows)
-- Returns `Vector{Variable}` with type info and vocabularies for categorical data
+- Returns `Vector{Variable}` with type info and domain-scoped vocabularies for categorical data
+- All vocabularies created during SQL metadata extraction are automatically associated with the provided `domain_id`
 
 ### Data Ingestion Workflows
 
@@ -124,8 +125,21 @@ DuckDB.jl has deprecated result-chunk APIs. In `meta_duckdb.jl`, use `duckdb_que
 ### Domain Scoping
 Domains provide namespace isolation:
 - Variable names unique within domain
+- Vocabularies scoped within domains (UNIQUE constraint on `domain_id`, `name`)
 - Studies link to domains via `study_domains`
 - Entities and relations scoped to domains
+
+### Vocabulary Management
+Vocabularies are domain-scoped and provide controlled value sets for categorical variables:
+- `Vocabulary` struct includes `domain_id::Int` field linking to a specific domain
+- Database constraint: `UNIQUE(domain_id, name)` ensures vocabulary names are unique within each domain
+- Same vocabulary name can exist in different domains with different value sets
+- Create/retrieve vocabularies using `ensure_vocabulary!(store, domain_id, name, description, items)`
+- Three `get_vocabulary()` overloads:
+  - `get_vocabulary(store, vocab_id)` - retrieve by ID
+  - `get_vocabulary(store, domain_id, name)` - domain-scoped lookup
+  - `get_vocabulary(store, name)` - unique name lookup (errors if name exists in multiple domains)
+- REDCap and SQL metadata extraction automatically scope vocabularies to their domain context
 
 ## Common Patterns
 
