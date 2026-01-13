@@ -194,13 +194,10 @@ end
         @test fetched_2.vocabulary !== missing
         @test fetched_2.vocabulary.name == vocab_name_2
     finally
-        # Cleanup: delete variable then domain, then vocabularies
+        # Cleanup: delete variable, then vocabularies, then domain (respecting foreign key constraints)
         try
             if !isnothing(variable_id)
                 DBInterface.execute(store.store, raw"DELETE FROM variables WHERE variable_id = $1;", (Int(variable_id),))
-            end
-            if !isnothing(domain_id)
-                DBInterface.execute(store.store, raw"DELETE FROM domains WHERE domain_id = $1;", (Int(domain_id),))
             end
 
             for vid in (vocab_id_1, vocab_id_2)
@@ -208,6 +205,10 @@ end
                     DBInterface.execute(store.store, raw"DELETE FROM vocabulary_items WHERE vocabulary_id = $1;", (Int(vid),))
                     DBInterface.execute(store.store, raw"DELETE FROM vocabularies WHERE vocabulary_id = $1;", (Int(vid),))
                 end
+            end
+            
+            if !isnothing(domain_id)
+                DBInterface.execute(store.store, raw"DELETE FROM domains WHERE domain_id = $1;", (Int(domain_id),))
             end
         catch e
             @warn "Categorical variable test cleanup failed" exception=(e, catch_backtrace())

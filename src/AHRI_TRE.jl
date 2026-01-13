@@ -34,7 +34,7 @@ export
     get_entity, create_entity!, get_entityrelation, create_entity_relation!, list_domainentities, list_domainrelations, get_domainentities, get_domainrelations,
     get_variable, add_variable!, update_variable!,
     get_domain_variables, get_dataset_variables, get_study_variables, save_dataset_variables!,
-    get_vocabulary,ensure_vocabulary!,
+    get_vocabulary, get_vocabularies, ensure_vocabulary!,
     create_asset, get_asset, get_study_assets,
     ingest_file, ingest_file_version, get_datafile_metadata, get_study_datafiles,
     ingest_redcap_project, transform_eav_to_dataset,

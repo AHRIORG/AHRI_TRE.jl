@@ -152,24 +152,83 @@ unique_test_suffix() = replace("$(time_ns())_$(getpid())_$(uuid4())", "-" => "")
             @test isnothing(nonexistent_by_name)
         end
 
+        @testset "Get all vocabularies in a domain" begin
+            # Create multiple vocabularies in domain 1
+            vocab_names = ["list_test_a_$suffix", "list_test_b_$suffix", "list_test_c_$suffix"]
+            created_vocab_ids = Int[]
+            
+            for (idx, name) in enumerate(vocab_names)
+                items = AHRI_TRE.VocabularyItem[
+                    AHRI_TRE.VocabularyItem(vocabulary_id=0, value=idx, code="CODE_$idx", description="Item $idx"),
+                ]
+                vocab_id = AHRI_TRE.ensure_vocabulary!(store, domain_id_1, name, "Test vocab $idx", items)
+                push!(created_vocab_ids, vocab_id)
+            end
+
+            # Get all vocabularies in domain 1 using domain_id
+            vocabs_d1 = AHRI_TRE.get_vocabularies(store, domain_id_1)
+            @test !isempty(vocabs_d1)
+            
+            # Check that our created vocabularies are present
+            vocab_names_fetched = [v.name for v in vocabs_d1]
+            for name in vocab_names
+                @test name in vocab_names_fetched
+            end
+            
+            # Verify each vocabulary has its items populated
+            for vocab in vocabs_d1
+                if vocab.name in vocab_names
+                    @test length(vocab.items) >= 1
+                    @test !isnothing(vocab.vocabulary_id)
+                    @test vocab.domain_id == domain_id_1
+                end
+            end
+
+            # Get vocabularies using Domain struct
+            domain1_obj = AHRI_TRE.Domain(domain_id=domain_id_1, name="test_domain_1")
+            vocabs_from_struct = AHRI_TRE.get_vocabularies(store, domain1_obj)
+            @test length(vocabs_from_struct) == length(vocabs_d1)
+            
+            # Domain 2 should have different (fewer) vocabularies
+            vocabs_d2 = AHRI_TRE.get_vocabularies(store, domain_id_2)
+            vocab_names_d2 = [v.name for v in vocabs_d2]
+            
+            # Our test vocabularies should not be in domain 2
+            for name in vocab_names
+                @test !(name in vocab_names_d2)
+            end
+
+            # Cleanup the extra vocabularies we created
+            for vocab_id in created_vocab_ids
+                try
+                    DBInterface.execute(store.store, 
+                        raw"DELETE FROM vocabulary_items WHERE vocabulary_id = $1;", (vocab_id,))
+                    DBInterface.execute(store.store, 
+                        raw"DELETE FROM vocabularies WHERE vocabulary_id = $1;", (vocab_id,))
+                catch e
+                    @warn "Failed to cleanup test vocabulary" vocab_id exception=e
+                end
+            end
+        end
+
     finally
         # Cleanup
         try
-            # Delete vocabularies
-            if !isnothing(vocab_id_1)
+            # Delete ALL vocabularies in both domains before deleting domains
+            if !isnothing(domain_id_1)
                 DBInterface.execute(store.store, 
-                    raw"DELETE FROM vocabulary_items WHERE vocabulary_id = $1;", (vocab_id_1,))
+                    raw"DELETE FROM vocabulary_items WHERE vocabulary_id IN (SELECT vocabulary_id FROM vocabularies WHERE domain_id = $1);", (domain_id_1,))
                 DBInterface.execute(store.store, 
-                    raw"DELETE FROM vocabularies WHERE vocabulary_id = $1;", (vocab_id_1,))
+                    raw"DELETE FROM vocabularies WHERE domain_id = $1;", (domain_id_1,))
             end
-            if !isnothing(vocab_id_2)
+            if !isnothing(domain_id_2)
                 DBInterface.execute(store.store, 
-                    raw"DELETE FROM vocabulary_items WHERE vocabulary_id = $1;", (vocab_id_2,))
+                    raw"DELETE FROM vocabulary_items WHERE vocabulary_id IN (SELECT vocabulary_id FROM vocabularies WHERE domain_id = $1);", (domain_id_2,))
                 DBInterface.execute(store.store, 
-                    raw"DELETE FROM vocabularies WHERE vocabulary_id = $1;", (vocab_id_2,))
+                    raw"DELETE FROM vocabularies WHERE domain_id = $1;", (domain_id_2,))
             end
 
-            # Delete domains
+            # Delete domains after all vocabularies are removed
             if !isnothing(domain_id_1)
                 DBInterface.execute(store.store, 
                     raw"DELETE FROM domains WHERE domain_id = $1;", (domain_id_1,))

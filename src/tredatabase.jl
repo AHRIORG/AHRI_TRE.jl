@@ -2512,6 +2512,41 @@ function get_vocabulary(store::DataStore, name::AbstractString)::Union{Vocabular
 end
 
 """
+    get_vocabularies(store::DataStore, domain_id::Int)::Vector{Vocabulary}
+
+Return a vector of Vocabulary objects (with VocabularyItems populated) in the specified domain.
+- 'store' is the DataStore object containing the database connection.
+- 'domain_id' is the ID of the domain to list vocabularies from.
+Each Vocabulary object will have its items vector populated with VocabularyItem objects.
+"""
+function get_vocabularies(store::DataStore, domain_id::Int)::Vector{Vocabulary}
+    db = store.store
+    sql = raw"""
+        SELECT vocabulary_id FROM vocabularies WHERE domain_id = $1 ORDER BY name;
+    """
+    stmt = DBInterface.prepare(db, sql)
+    df = DBInterface.execute(stmt, (domain_id,)) |> DataFrame
+    
+    vocabularies = Vector{Vocabulary}()
+    for row in eachrow(df)
+        vocab = get_vocabulary(store, Int(row.vocabulary_id))
+        if !isnothing(vocab)
+            push!(vocabularies, vocab)
+        end
+    end
+    return vocabularies
+end
+
+"""
+    get_vocabularies(store::DataStore, domain::Domain)::Vector{Vocabulary}
+
+Return a vector of Vocabulary objects (with VocabularyItems populated) in the specified domain.
+- 'store' is the DataStore object containing the database connection.
+- 'domain' is the Domain object containing the domain_id.
+"""
+get_vocabularies(store::DataStore, domain::Domain)::Vector{Vocabulary} = get_vocabularies(store, domain.domain_id)
+
+"""
     get_study_variables(store::DataStore, study::Study, domain::Union{Domain,Nothing}=nothing)::Vector{Variable}
 
 Return a vector of Variable objects associated with the specified study.

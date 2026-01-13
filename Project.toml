@@ -1,6 +1,6 @@
 name = "AHRI_TRE"
 uuid = "401e9bd0-ba2c-459f-b6c2-f0990bf33f34"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Kobus Herbst<kobus.herbst@ahri.org>"]
 
 [deps]
