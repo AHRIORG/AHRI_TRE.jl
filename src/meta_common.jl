@@ -320,7 +320,7 @@ function get_code_table_vocabulary(conn, table_name::AbstractString, pk_column::
 end
 
 function build_code_table_vocabulary_for_column(conn, column_name::AbstractString, ref_table::AbstractString,
-    ref_column::AbstractString, flavour::DatabaseFlavour)::Union{Vocabulary,Nothing}
+    ref_column::AbstractString, domain_id::Int, flavour::DatabaseFlavour)::Union{Vocabulary,Nothing}
     if !is_code_table(conn, ref_table, ref_column, flavour)
         return nothing
     end
@@ -330,6 +330,7 @@ function build_code_table_vocabulary_for_column(conn, column_name::AbstractStrin
     end
     return Vocabulary(
         vocabulary_id=nothing,
+        domain_id=domain_id,
         name="$(column_name)_codes",
         description="Code table values from $ref_table",
         items=code_items
@@ -542,6 +543,7 @@ function sql_meta(conn, sql::AbstractString, domain_id::Int, flavour::DatabaseFl
             if !isempty(enum_items)
                 vocabulary = Vocabulary(
                     vocabulary_id=nothing,
+                    domain_id=domain_id,
                     name="$(column_name)_enum",
                     description="Enum values for $column_name",
                     items=enum_items
@@ -554,7 +556,7 @@ function sql_meta(conn, sql::AbstractString, domain_id::Int, flavour::DatabaseFl
             fk_ref = get_foreign_key_reference(conn, col_table, column_name, flavour)
             if !isnothing(fk_ref)
                 ref_table, ref_column = fk_ref
-                code_vocab = build_code_table_vocabulary_for_column(conn, column_name, ref_table, ref_column, flavour)
+                code_vocab = build_code_table_vocabulary_for_column(conn, column_name, ref_table, ref_column, domain_id, flavour)
                 if !isnothing(code_vocab)
                     value_type_id = TRE_TYPE_CATEGORY
                     vocabulary = code_vocab
@@ -566,7 +568,7 @@ function sql_meta(conn, sql::AbstractString, domain_id::Int, flavour::DatabaseFl
             direct_ref = find_code_table_by_column_name(conn, column_name, flavour, col_table)
             if !isnothing(direct_ref)
                 ref_table, ref_column = direct_ref
-                code_vocab = build_code_table_vocabulary_for_column(conn, column_name, ref_table, ref_column, flavour)
+                code_vocab = build_code_table_vocabulary_for_column(conn, column_name, ref_table, ref_column, domain_id, flavour)
                 if !isnothing(code_vocab)
                     value_type_id = TRE_TYPE_CATEGORY
                     vocabulary = code_vocab
@@ -581,6 +583,7 @@ function sql_meta(conn, sql::AbstractString, domain_id::Int, flavour::DatabaseFl
                 value_type_id = TRE_TYPE_CATEGORY
                 vocabulary = Vocabulary(
                     vocabulary_id=nothing,
+                    domain_id=domain_id,
                     name="$(column_name)_allowed",
                     description="Allowed values for $column_name",
                     items=check_items

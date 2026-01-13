@@ -322,7 +322,7 @@ function register_redcap_datadictionary(store::DataStore,
             if vtype_id == _VT_ENUM || vtype_id == _VT_MULTIRESPONSE
                 vname = isempty(vocabulary_prefix) ? "dom$(domain_id).$(fname)" : "$(vocabulary_prefix).$(fname)"
                 items = parse_redcap_choices(String(coalesce(choices, "")))
-                vocab_id = ensure_vocabulary!(store, vname, "REDCap choices for $(fname)", items)
+                vocab_id = ensure_vocabulary!(store, domain_id, vname, "REDCap choices for $(fname)", items)
             end
             value_format = isnothing(value_format) ? missing : value_format
             vocab_arg = (vocab_id === missing) ? missing : Int64(vocab_id)

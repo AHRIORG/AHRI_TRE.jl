@@ -294,15 +294,18 @@ function check_mssql_tables_exist(conn)
 end
 
 @testset "sql_to_dataset" begin
-    store, missing = open_tre_store()
-    study, domain = ensure_test_study_and_domain!(store)
+    if isnothing(TRE_TEST_STORE)
+        @test_skip "TRE test datastore not configured"
+        return
+    end
+    study, domain = ensure_test_study_and_domain!(TRE_TEST_STORE)
 
     try
         @testset "DuckDB source" begin
             handles, err = setup_duckdb_source()
             try
                 @info "Running DuckDB sql_to_dataset test"
-                ingest_and_validate(store, study, domain, handles.conn, "DUCKDB", "DuckDB cause counts")
+                ingest_and_validate(TRE_TEST_STORE, study, domain, handles.conn, "DUCKDB", "DuckDB cause counts")
             finally
                 DBInterface.close!(handles.conn)
                 DuckDB.close(handles.db)
@@ -313,7 +316,7 @@ end
             db, err = setup_sqlite_source()
             try
                 @info "Running SQLite sql_to_dataset test"
-                ingest_and_validate(store, study, domain, db, "SQLITE", "SQLite cause counts")
+                ingest_and_validate(TRE_TEST_STORE, study, domain, db, "SQLITE", "SQLite cause counts")
             finally
                 try
                     DBInterface.close!(db)
@@ -330,7 +333,7 @@ end
             handles, err = setup_postgres_source()
             try
                 @info "Running PostgreSQL sql_to_dataset test"
-                ingest_and_validate(store, study, domain, handles.conn, "POSTGRESQL", "PostgreSQL cause counts")
+                ingest_and_validate(TRE_TEST_STORE, study, domain, handles.conn, "POSTGRESQL", "PostgreSQL cause counts")
             finally
                 teardown_postgres_source(handles)
             end
@@ -344,7 +347,7 @@ end
         @testset "MSSQL source" begin
             try
                 @info "Running MSSQL sql_to_dataset test"
-                ingest_and_validate(store, study, domain, conn, "MSSQL", "MSSQL cause counts")
+                ingest_and_validate(TRE_TEST_STORE, study, domain, conn, "MSSQL", "MSSQL cause counts")
             finally
                 try
                     DBInterface.close!(conn)
@@ -353,6 +356,5 @@ end
             end
         end
     finally
-        AHRI_TRE.closedatastore(store)
     end
 end

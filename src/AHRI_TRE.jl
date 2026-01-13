@@ -157,6 +157,7 @@ end
 
 Base.@kwdef mutable struct Vocabulary <: AbstractVocabulary
     vocabulary_id::Union{Int,Nothing} = nothing
+    domain_id::Int
     name::String
     description::Union{String,Missing} = missing
     items::Vector{AbstractVocabularyItem} = AbstractVocabularyItem[]

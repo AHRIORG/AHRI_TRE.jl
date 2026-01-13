@@ -2,130 +2,184 @@ using AHRI_TRE
 using Test
 using UUIDs
 using DBInterface
+using DataFrames
 
 unique_test_suffix() = replace("$(time_ns())_$(getpid())_$(uuid4())", "-" => "")
 
-function _gather_env_vocab(keys::Vector{String})
-    values = Dict{String,String}()
-    missing = String[]
-    for key in keys
-        value = get(ENV, key, "")
-        if isempty(value)
-            push!(missing, key)
-        else
-            values[key] = value
-        end
-    end
-    return values, missing
-end
-
-function open_tre_store_vocab()
-    keys = ["TRE_SERVER", "TRE_USER", "TRE_PWD", "TRE_TEST_DBNAME"]
-    values, missing = _gather_env_vocab(keys)
-    if !isempty(missing)
-        return nothing, missing
-    end
-
-    # Avoid opening/attaching the DuckDB lake in this test; we only need the
-    # PostgreSQL metadata store connection.
-    store = AHRI_TRE.DataStore(
-        server=values["TRE_SERVER"],
-        user=values["TRE_USER"],
-        password=values["TRE_PWD"],
-        dbname=values["TRE_TEST_DBNAME"],
-    )
-
-    try
-        conn, lake = AHRI_TRE.opendatastore(
-            values["TRE_SERVER"],
-            values["TRE_USER"],
-            values["TRE_PWD"],
-            values["TRE_TEST_DBNAME"],
-            nothing,
-            nothing,
-            nothing,
-            nothing,
-        )
-        store.store = conn
-        store.lake = lake
-        return store, String[]
-    catch e
-        @warn "Unable to open TRE datastore" exception=(e, catch_backtrace())
-        return nothing, ["TRE datastore connection failed"]
-    end
-end
-
-@testset "Vocabulary CRUD" begin
-    store, missing = open_tre_store_vocab()
-    if isnothing(store)
-        @test_skip "TRE datastore not configured: $(join(missing, ", "))"
+@testset "Vocabulary CRUD - Domain Scoping" begin
+    if isnothing(TRE_TEST_STORE)
+        @test_skip "TRE test datastore not configured"
         return
     end
 
+    store = TRE_TEST_STORE
+    domain_id_1 = nothing
+    domain_id_2 = nothing
     vocab_id_1 = nothing
+    vocab_id_2 = nothing
+    
     try
-        vocab_name = "vocab_" * unique_test_suffix()
+        # Setup: Create two test domains
+        suffix = unique_test_suffix()
+        domain1 = AHRI_TRE.add_domain!(store, AHRI_TRE.Domain(name="vocab_test_domain1_$suffix"))
+        domain2 = AHRI_TRE.add_domain!(store, AHRI_TRE.Domain(name="vocab_test_domain2_$suffix"))
+        @test domain1.domain_id !== nothing
+        @test domain2.domain_id !== nothing
+        domain_id_1 = Int(domain1.domain_id)
+        domain_id_2 = Int(domain2.domain_id)
 
-        # 1) Add via ensure_vocabulary! and retrieve
-        items_v1 = AHRI_TRE.VocabularyItem[
-            AHRI_TRE.VocabularyItem(vocabulary_id=0, value=1, code="A", description="Alpha"),
-            AHRI_TRE.VocabularyItem(vocabulary_id=0, value=2, code="B", description="Beta"),
-        ]
+        @testset "Create and retrieve vocabulary by (domain_id, name)" begin
+            vocab_name = "status_codes_$suffix"
+            items = AHRI_TRE.VocabularyItem[
+                AHRI_TRE.VocabularyItem(vocabulary_id=0, value=1, code="ACTIVE", description="Active"),
+                AHRI_TRE.VocabularyItem(vocabulary_id=0, value=2, code="INACTIVE", description="Inactive"),
+            ]
 
-        vocab_id_1 = AHRI_TRE.ensure_vocabulary!(store, vocab_name, "desc v1", items_v1)
-        @test vocab_id_1 isa Int
-        @test vocab_id_1 > 0
+            # Create vocabulary in domain 1
+            vocab_id_1 = AHRI_TRE.ensure_vocabulary!(store, domain_id_1, vocab_name, "Status codes for domain 1", items)
+            @test vocab_id_1 > 0
 
-        fetched_1 = AHRI_TRE.get_vocabulary(store, vocab_name)
-        @test fetched_1 !== nothing
-        @test fetched_1.vocabulary_id == vocab_id_1
-        @test fetched_1.name == vocab_name
-        @test fetched_1.description == "desc v1"
-        @test length(fetched_1.items) == 2
-        @test Set([(it.value, it.code) for it in fetched_1.items]) == Set([(1, "A"), (2, "B")])
+            # Retrieve by domain_id and name
+            fetched = AHRI_TRE.get_vocabulary(store, domain_id_1, vocab_name)
+            @test fetched !== nothing
+            @test fetched.vocabulary_id == vocab_id_1
+            @test fetched.domain_id == domain_id_1
+            @test fetched.name == vocab_name
+            @test length(fetched.items) == 2
 
-        # 2) Assert the UNIQUE constraint exists (without relying on a thrown error
-        # that can be noisy in CI logs).
-        df_constraint = DBInterface.execute(
-            store.store,
-            raw"""
-                SELECT conname
-                FROM pg_constraint
-                WHERE conrelid = 'public.vocabularies'::regclass
-                  AND contype = 'u'
-                  AND conname = 'vocabularies_name_key';
-            """,
-        ) |> DataFrame
-        @test nrow(df_constraint) == 1
-
-        # 3) Update via ensure_vocabulary! (same name, new description + new items)
-        items_v2 = AHRI_TRE.VocabularyItem[
-            AHRI_TRE.VocabularyItem(vocabulary_id=0, value=10, code="X", description="Ex"),
-        ]
-
-        vocab_id_2 = AHRI_TRE.ensure_vocabulary!(store, vocab_name, "desc v2", items_v2)
-        @test vocab_id_2 == vocab_id_1
-
-        fetched_2 = AHRI_TRE.get_vocabulary(store, vocab_name)
-        @test fetched_2 !== nothing
-        @test fetched_2.vocabulary_id == vocab_id_1
-        @test fetched_2.description == "desc v2"
-        @test length(fetched_2.items) == 1
-        @test fetched_2.items[1].value == 10
-        @test fetched_2.items[1].code == "X"
-        @test fetched_2.items[1].description == "Ex"
-        @test fetched_2.items[1].vocabulary_id == vocab_id_1
-        @test fetched_2.items[1].vocabulary_item_id !== nothing
-    finally
-        # Cleanup: keep test DB from accumulating vocabularies across runs
-        if !isnothing(vocab_id_1)
-            try
-                DBInterface.execute(store.store, raw"DELETE FROM vocabulary_items WHERE vocabulary_id = $1;", (Int(vocab_id_1),))
-                DBInterface.execute(store.store, raw"DELETE FROM vocabularies WHERE vocabulary_id = $1;", (Int(vocab_id_1),))
-            catch e
-                @warn "Vocabulary test cleanup failed" exception=(e, catch_backtrace())
-            end
+            # Vocabulary should not exist in domain 2 with same name
+            not_found = AHRI_TRE.get_vocabulary(store, domain_id_2, vocab_name)
+            @test isnothing(not_found)
         end
-        AHRI_TRE.closedatastore(store)
+
+        @testset "Same vocabulary name in different domains" begin
+            vocab_name = "shared_name_$suffix"
+            items_d1 = AHRI_TRE.VocabularyItem[
+                AHRI_TRE.VocabularyItem(vocabulary_id=0, value=1, code="D1_A", description="Domain 1 A"),
+            ]
+            items_d2 = AHRI_TRE.VocabularyItem[
+                AHRI_TRE.VocabularyItem(vocabulary_id=0, value=1, code="D2_A", description="Domain 2 A"),
+            ]
+
+            # Create vocabulary with same name in both domains
+            v1_id = AHRI_TRE.ensure_vocabulary!(store, domain_id_1, vocab_name, "D1 vocab", items_d1)
+            v2_id = AHRI_TRE.ensure_vocabulary!(store, domain_id_2, vocab_name, "D2 vocab", items_d2)
+
+            # IDs should be different
+            @test v1_id != v2_id
+
+            # Each should be retrievable with correct domain context
+            v1_fetched = AHRI_TRE.get_vocabulary(store, domain_id_1, vocab_name)
+            v2_fetched = AHRI_TRE.get_vocabulary(store, domain_id_2, vocab_name)
+
+            @test v1_fetched.vocabulary_id == v1_id
+            @test v1_fetched.domain_id == domain_id_1
+            @test v1_fetched.items[1].code == "D1_A"
+
+            @test v2_fetched.vocabulary_id == v2_id
+            @test v2_fetched.domain_id == domain_id_2
+            @test v2_fetched.items[1].code == "D2_A"
+
+            # Trying to get by name alone should fail with error about non-unique name
+            @test_throws ErrorException AHRI_TRE.get_vocabulary(store, vocab_name)
+        end
+
+        @testset "Get vocabulary by name alone (unique case)" begin
+            vocab_name = "unique_name_$suffix"
+            items = AHRI_TRE.VocabularyItem[
+                AHRI_TRE.VocabularyItem(vocabulary_id=0, value=1, code="X", description="X value"),
+            ]
+
+            # Create in domain 1 only
+            v_id = AHRI_TRE.ensure_vocabulary!(store, domain_id_1, vocab_name, "Unique vocabulary", items)
+
+            # Should be retrievable by name alone since it's unique
+            v_fetched = AHRI_TRE.get_vocabulary(store, vocab_name)
+            @test v_fetched !== nothing
+            @test v_fetched.vocabulary_id == v_id
+            @test v_fetched.domain_id == domain_id_1
+            @test v_fetched.name == vocab_name
+        end
+
+        @testset "Update vocabulary items" begin
+            vocab_name = "mutable_vocab_$suffix"
+            items_v1 = AHRI_TRE.VocabularyItem[
+                AHRI_TRE.VocabularyItem(vocabulary_id=0, value=1, code="A", description="A"),
+                AHRI_TRE.VocabularyItem(vocabulary_id=0, value=2, code="B", description="B"),
+            ]
+
+            vocab_id = AHRI_TRE.ensure_vocabulary!(store, domain_id_1, vocab_name, "v1", items_v1)
+            fetched_v1 = AHRI_TRE.get_vocabulary(store, domain_id_1, vocab_name)
+            @test length(fetched_v1.items) == 2
+
+            # Update with new items
+            items_v2 = AHRI_TRE.VocabularyItem[
+                AHRI_TRE.VocabularyItem(vocabulary_id=0, value=10, code="X", description="X"),
+                AHRI_TRE.VocabularyItem(vocabulary_id=0, value=20, code="Y", description="Y"),
+                AHRI_TRE.VocabularyItem(vocabulary_id=0, value=30, code="Z", description="Z"),
+            ]
+
+            vocab_id_2 = AHRI_TRE.ensure_vocabulary!(store, domain_id_1, vocab_name, "v2", items_v2)
+            @test vocab_id_2 == vocab_id  # Same vocabulary ID
+
+            fetched_v2 = AHRI_TRE.get_vocabulary(store, domain_id_1, vocab_name)
+            @test fetched_v2.description == "v2"
+            @test length(fetched_v2.items) == 3
+            @test Set([it.code for it in fetched_v2.items]) == Set(["X", "Y", "Z"])
+        end
+
+        @testset "Retrieve vocabulary by ID" begin
+            vocab_name = "by_id_vocab_$suffix"
+            items = AHRI_TRE.VocabularyItem[
+                AHRI_TRE.VocabularyItem(vocabulary_id=0, value=1, code="ID", description="ID test"),
+            ]
+
+            vocab_id = AHRI_TRE.ensure_vocabulary!(store, domain_id_1, vocab_name, "For ID lookup", items)
+
+            # Retrieve by vocabulary_id alone
+            fetched = AHRI_TRE.get_vocabulary(store, vocab_id)
+            @test fetched !== nothing
+            @test fetched.vocabulary_id == vocab_id
+            @test fetched.domain_id == domain_id_1
+            @test fetched.name == vocab_name
+        end
+
+        @testset "Nonexistent vocabulary returns nothing" begin
+            nonexistent = AHRI_TRE.get_vocabulary(store, domain_id_1, "this_vocab_does_not_exist_anywhere")
+            @test isnothing(nonexistent)
+
+            nonexistent_by_name = AHRI_TRE.get_vocabulary(store, "also_does_not_exist_$suffix")
+            @test isnothing(nonexistent_by_name)
+        end
+
+    finally
+        # Cleanup
+        try
+            # Delete vocabularies
+            if !isnothing(vocab_id_1)
+                DBInterface.execute(store.store, 
+                    raw"DELETE FROM vocabulary_items WHERE vocabulary_id = $1;", (vocab_id_1,))
+                DBInterface.execute(store.store, 
+                    raw"DELETE FROM vocabularies WHERE vocabulary_id = $1;", (vocab_id_1,))
+            end
+            if !isnothing(vocab_id_2)
+                DBInterface.execute(store.store, 
+                    raw"DELETE FROM vocabulary_items WHERE vocabulary_id = $1;", (vocab_id_2,))
+                DBInterface.execute(store.store, 
+                    raw"DELETE FROM vocabularies WHERE vocabulary_id = $1;", (vocab_id_2,))
+            end
+
+            # Delete domains
+            if !isnothing(domain_id_1)
+                DBInterface.execute(store.store, 
+                    raw"DELETE FROM domains WHERE domain_id = $1;", (domain_id_1,))
+            end
+            if !isnothing(domain_id_2)
+                DBInterface.execute(store.store, 
+                    raw"DELETE FROM domains WHERE domain_id = $1;", (domain_id_2,))
+            end
+        catch e
+            @warn "Vocabulary CRUD test cleanup failed" exception=(e, catch_backtrace())
+        end
     end
 end

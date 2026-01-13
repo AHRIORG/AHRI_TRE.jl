@@ -140,6 +140,7 @@ end
             AHRI_TRE.VocabularyItem(vocabulary_id=0, value=2, code="B", description="Beta"),
         ]
         vocab_v1 = AHRI_TRE.Vocabulary(
+            domain_id=Int(domain.domain_id),
             name=vocab_name_1,
             description="desc v1",
             items=AHRI_TRE.AbstractVocabularyItem[items_v1...],
@@ -173,6 +174,7 @@ end
             AHRI_TRE.VocabularyItem(vocabulary_id=0, value=10, code="X", description="Ex"),
         ]
         vocab_v2 = AHRI_TRE.Vocabulary(
+            domain_id=Int(domain.domain_id),
             name=vocab_name_2,
             description="desc v2",
             items=AHRI_TRE.AbstractVocabularyItem[items_v2...],
